@@ -1,0 +1,79 @@
+# =============================================================================
+# Configuracion de entrenamiento — EfficientNet-B2 sobre escala IGA
+# Fases 4 y 5 de CRISP-DM. Seccion 8.1 del documento maestro.
+#
+# Referencia de calibracion: Watanabe (2025) — 90,0 % exactitud, F1 macro 0,885,
+# AUC-ROC macro 0,998 sobre 349 imagenes faciales con IGA.
+# Criterio de exito declarado en la Fase 1: replicar >= 85 % de ese F1 macro,
+# es decir F1 macro >= 0,752 sobre el test congelado.
+# =============================================================================
+
+seed: 42                      # RNF-03: fija todo el pipeline
+dataset_version: v1.0
+data_dir: ./data/prepared
+output_dir: ./checkpoints
+tracking_dir: ./runs
+
+model:
+  name: efficientnet_b2       # timm
+  pretrained: true            # ImageNet
+  num_classes: 5              # sin_lesiones · casi_sin_lesiones · leve · moderado · severo
+  input_size: 260             # entrada nativa de EfficientNet-B2
+  # Transfer learning: cabeza + ultimas capas convolucionales (seccion 8.1)
+  unfreeze_blocks: 3
+  progressive_unfreezing: false
+
+training:
+  epochs: 40                  # 30-50 segun la seccion 8.1
+  batch_size: 16              # 16-32 segun VRAM; 16 cabe en los 8 GB de la RTX 5060
+  optimizer: adamw
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  scheduler: cosine
+  warmup_epochs: 2
+  # Compensa el desbalance de clases IGA, que en los datasets publicos es severo
+  class_weight: balanced
+  label_smoothing: 0.05
+  early_stopping:
+    monitor: val_f1_macro
+    patience: 5
+    mode: max
+  mixed_precision: true
+
+augmentation:
+  # Seccion 8.3. NUNCA se altera el hue: distorsionaria el tono de piel y el
+  # eritema, que son justamente la senal que la gradacion evalua.
+  rotation_degrees: 15
+  horizontal_flip: 0.5
+  brightness: 0.10
+  contrast: 0.10
+  saturation: 0.0
+  hue: 0.0
+  cutmix_probability: 0.15
+
+preprocessing:
+  face_detector: mtcnn        # mtcnn | retinaface | none
+  crop_margin: 0.15
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std: [0.229, 0.224, 0.225]
+
+splits:
+  # 80/10/10 estratificados por clase IGA y grupo etario (seccion 8.2).
+  # El test queda CONGELADO para toda la tesis.
+  train: 0.8
+  val: 0.1
+  test: 0.1
+  stratify_by: [iga_class, age_group]
+
+evaluation:
+  cross_validation_folds: 5   # validacion cruzada estratificada durante el desarrollo
+  metrics:
+    - accuracy
+    - f1_macro
+    - f1_per_class
+    - auc_roc_macro
+    - sensitivity
+    - specificity
+    - confusion_matrix
+  # Auditoria exploratoria de equidad por fototipo (Fitzpatrick17k, seccion 8.2)
+  fairness_audit_by: fitzpatrick

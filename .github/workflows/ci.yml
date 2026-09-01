@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  quality:
+    name: Ruff · mypy · pytest
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Fijar Python 3.11
+        run: uv python install 3.11
+
+      - name: Instalar dependencias
+        run: uv sync --extra dev
+
+      - name: Ruff
+        run: uv run ruff check app tests
+
+      - name: Ruff format
+        run: uv run ruff format --check app tests
+
+      - name: mypy --strict
+        run: uv run mypy app
+
+      - name: Pytest con cobertura
+        run: uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=70
