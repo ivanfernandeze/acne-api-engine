@@ -10,8 +10,16 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.config import get_settings
 from app.domain.iga import IGA_TO_GAGS_CENTRE, gags_grade_from_score
+from app.models.base import AnamnesisItem, ClinicalContext
 from app.models.registry import get_classifier
-from app.schemas import GagsSecondary, InferSingleRequest, InferSingleResponse, Prediction
+from app.schemas import (
+    ClinicalAssessment,
+    GagsSecondary,
+    InferSingleRequest,
+    InferSingleResponse,
+    MemberPredictionOut,
+    Prediction,
+)
 from app.services.telemetry import telemetry
 
 router = APIRouter(prefix="/infer", tags=["inference"])
@@ -55,8 +63,22 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
     classifier = get_classifier()
     started = time.perf_counter()
 
+    context = (
+        None
+        if request.clinical_context is None
+        else ClinicalContext(
+            age=request.clinical_context.age,
+            sex=request.clinical_context.sex,
+            phototype=request.clinical_context.phototype,
+            answers=tuple(
+                AnamnesisItem(question=item.question, answer=item.answer)
+                for item in request.clinical_context.answers
+            ),
+        )
+    )
+
     try:
-        result = classifier.predict(image_bytes, request.mime_type)
+        result = classifier.predict(image_bytes, request.mime_type, context)
     except Exception as error:  # noqa: BLE001 - report the failure rate honestly
         telemetry.record((time.perf_counter() - started) * 1000, failed=True)
         raise HTTPException(
@@ -67,7 +89,15 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
     latency_ms = (time.perf_counter() - started) * 1000
     telemetry.record(latency_ms)
 
-    gags_score = IGA_TO_GAGS_CENTRE[result.iga_class]
+    # Prefer the model's own GAGS when it produced one. The band centre is a presentational
+    # fallback derived from the IGA class, so using it over a real estimate would throw away the
+    # only genuine reading of the secondary scale the system ever gets.
+    assessment = result.assessment
+    gags_score = (
+        assessment.gags_score
+        if assessment is not None and assessment.gags_score is not None
+        else IGA_TO_GAGS_CENTRE[result.iga_class]
+    )
 
     return InferSingleResponse(
         prediction=Prediction(
@@ -79,6 +109,19 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
             grade=gags_grade_from_score(gags_score),
             score=gags_score,
         ),
+        assessment=(
+            None
+            if assessment is None
+            else ClinicalAssessment(
+                summary=assessment.summary,
+                lesion_types=list(assessment.lesion_types),
+                affected_zones=list(assessment.affected_zones),
+                severity_rationale=assessment.severity_rationale,
+                differentials=list(assessment.differentials),
+                considerations=list(assessment.considerations),
+                anamnesis_flags=list(assessment.anamnesis_flags),
+            )
+        ),
         heatmap_png_base64=(
             base64.b64encode(result.heatmap_png).decode("ascii")
             if result.heatmap_png is not None
@@ -89,4 +132,24 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
         model_backend=classifier.backend,  # type: ignore[arg-type]
         weights_checksum=classifier.weights_checksum,
         seed=settings.model_seed,
+        members=[
+            MemberPredictionOut(
+                tag=member.tag,
+                model_name=member.model_name,
+                model_version=member.model_version,
+                weights_checksum=member.weights_checksum,
+                weight=member.weight,
+                iga_class=member.iga_class,
+                confidence=member.confidence,
+                class_probs=member.class_probs,
+                heatmap_png_base64=(
+                    base64.b64encode(member.heatmap_png).decode("ascii")
+                    if member.heatmap_png is not None
+                    else None
+                ),
+                latency_ms=member.latency_ms,
+            )
+            for member in result.members
+        ],
+        agreement=result.agreement,
     )

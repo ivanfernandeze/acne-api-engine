@@ -1,15 +1,21 @@
-"""Evaluate the trained model on the frozen test split.
+"""Evaluate a trained classifier on the frozen test split.
 
-Covers: Fase 5 de CRISP-DM (seccion 8.5). Writes ``runs/<dataset_version>/metrics-test.json``,
-which is exactly what ``POST /model/eval`` serves and what feeds ``REPORTE-EVALUACION-MODELO.pdf``.
+Covers: Fase 5 de CRISP-DM (seccion 8.5). Writes ``runs/<dataset_version>/metrics-<split>.json``,
+which is exactly what ``POST /model/eval`` serves and what feeds ``REPORTE-EVALUACION-MODELO.pdf``,
+plus ``metrics-<split>-<tag>.json`` so several models can be compared (``training.compare``).
 
     uv run python -m training.evaluate --config training/config.yaml
+    uv run python -m training.evaluate --checkpoint checkpoints/resnet50_iga.pt --tag resnet50
+
+``compute_metrics`` is the single definition of the metric set; ``train_yolo_cls`` and
+``cross_validate`` reuse it so every model is scored by the same code.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,20 +33,34 @@ def main() -> None:
     parser.add_argument("--config", default="training/config.yaml")
     parser.add_argument("--split", default="test", choices=["train", "val", "test"])
     parser.add_argument("--manifest", default=None)
+    parser.add_argument(
+        "--checkpoint", default=None, help="Por defecto <output_dir>/efficientnet_b2_iga.pt"
+    )
+    parser.add_argument(
+        "--tag",
+        default=None,
+        help=(
+            "Etiqueta del modelo para metrics-<split>-<tag>.json. "
+            "Por defecto, model_name del checkpoint."
+        ),
+    )
+    parser.add_argument(
+        "--no-primary",
+        action="store_true",
+        help="No sobrescribir metrics-<split>.json (el archivo que sirve POST /model/eval).",
+    )
     args = parser.parse_args()
 
     config: dict[str, Any] = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
 
     try:
-        import numpy as np
         import timm
         import torch
-        from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score
         from torch.utils.data import DataLoader
     except ImportError as error:
         raise SystemExit("Falta el extra [torch]: uv pip install -e '.[torch]'") from error
 
-    checkpoint_path = Path(config["output_dir"]) / "efficientnet_b2_iga.pt"
+    checkpoint_path = Path(args.checkpoint or Path(config["output_dir"]) / "efficientnet_b2_iga.pt")
     if not checkpoint_path.is_file():
         raise SystemExit(
             f"No hay checkpoint en {checkpoint_path}. Entrene primero:\n"
@@ -61,14 +81,15 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
-    model = timm.create_model(
-        config["model"]["name"], pretrained=False, num_classes=len(IGA_CLASSES)
-    )
+    model_name = str(checkpoint.get("model_name", config["model"]["name"]))
+    input_size = int(checkpoint.get("input_size", config["model"]["input_size"]))
+    tag = args.tag or model_name
+    model = timm.create_model(model_name, pretrained=False, num_classes=len(IGA_CLASSES))
     model.load_state_dict(checkpoint["state_dict"])
     model.eval().to(device)
 
     loader = DataLoader(
-        build_torch_dataset(subset, int(config["model"]["input_size"]), train=False),
+        build_torch_dataset(subset, input_size, train=False),
         batch_size=int(config["training"]["batch_size"]),
         shuffle=False,
         num_workers=0,
@@ -86,48 +107,52 @@ def main() -> None:
             predictions.extend(torch.argmax(probs, dim=1).cpu().tolist())
             targets.extend(labels.cpu().tolist())
 
-    matrix = confusion_matrix(targets, predictions, labels=list(range(len(IGA_CLASSES))))
-    accuracy = float(np.mean(np.array(targets) == np.array(predictions)))
-    f1_macro = float(f1_score(targets, predictions, average="macro", zero_division=0))
+    # Single-image latency, the way the engine serves it (batch of one). The first call pays
+    # for kernel selection and is discarded.
+    single = DataLoader(build_torch_dataset(subset[:21], input_size, train=False), batch_size=1)
+    latencies: list[float] = []
+    with torch.no_grad():
+        for images, _ in single:
+            images = images.to(device)
+            started = time.perf_counter()
+            model(images)
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            latencies.append((time.perf_counter() - started) * 1000)
+    latencies = sorted(latencies[1:])
 
-    # AUC-ROC needs at least two classes present in the split.
-    auc_roc_macro: float | None = None
-    if len(set(targets)) > 1:
-        try:
-            auc_roc_macro = float(
-                roc_auc_score(
-                    targets,
-                    np.array(probabilities),
-                    multi_class="ovr",
-                    average="macro",
-                    labels=list(range(len(IGA_CLASSES))),
-                )
-            )
-        except ValueError:
-            auc_roc_macro = None
-
-    per_class = _per_class_metrics(matrix)
-
-    payload = {
-        "accuracy": round(accuracy, 6),
-        "f1_macro": round(f1_macro, 6),
-        "auc_roc_macro": None if auc_roc_macro is None else round(auc_roc_macro, 6),
-        "confusion_matrix": matrix.tolist(),
-        "per_class_metrics": per_class,
-        "dataset_version": config["dataset_version"],
-        "split": args.split,
-        "model_version": checkpoint.get("version", "desconocida"),
-        "seed": checkpoint.get("seed", config["seed"]),
-        "run_id": checkpoint.get("version"),
-        "n": len(targets),
-    }
+    payload = compute_metrics(targets, predictions, probabilities)
+    payload.update(
+        {
+            "inference_ms_median": round(latencies[len(latencies) // 2], 2) if latencies else None,
+            "model_name": model_name,
+            "tag": tag,
+            "parameters": int(sum(p.numel() for p in model.parameters())),
+            "input_size": input_size,
+            "dataset_version": config["dataset_version"],
+            "split": args.split,
+            "model_version": checkpoint.get("version", "desconocida"),
+            "seed": checkpoint.get("seed", config["seed"]),
+            "run_id": checkpoint.get("version"),
+            "n": len(targets),
+        }
+    )
 
     output_dir = Path(config["tracking_dir"]) / config["dataset_version"]
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"metrics-{args.split}.json"
+    output_path = output_dir / f"metrics-{args.split}-{tag}.json"
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    if not args.no_primary:
+        (output_dir / f"metrics-{args.split}.json").write_text(
+            json.dumps(payload, indent=2), encoding="utf-8"
+        )
 
-    print(f"\nSplit '{args.split}' · n = {len(targets)}")
+    accuracy = payload["accuracy"]
+    f1_macro = payload["f1_macro"]
+    auc_roc_macro = payload["auc_roc_macro"]
+    per_class = payload["per_class_metrics"]
+
+    print(f"\nModelo '{model_name}' · split '{args.split}' · n = {len(targets)}")
     print(f"  Exactitud      : {accuracy:.4f}")
     print(f"  F1 macro       : {f1_macro:.4f}")
     print(f"  AUC-ROC macro  : {'—' if auc_roc_macro is None else f'{auc_roc_macro:.4f}'}")
@@ -140,11 +165,58 @@ def main() -> None:
         )
 
     verdict = "CUMPLE" if f1_macro >= TARGET_F1_MACRO else "NO CUMPLE"
-    print(
-        f"\nCriterio de éxito de la Fase 1 (F1 macro >= {TARGET_F1_MACRO:.3f}): {verdict}"
-    )
+    print(f"\nCriterio de éxito de la Fase 1 (F1 macro >= {TARGET_F1_MACRO:.3f}): {verdict}")
     print(f"Métricas escritas en {output_path}")
     print("Ya están disponibles en POST /model/eval y en REPORTE-EVALUACION-MODELO.pdf.")
+
+
+def compute_metrics(
+    targets: list[int], predictions: list[int], probabilities: list[list[float]]
+) -> dict[str, Any]:
+    """The section 8.5 metric set for one split, identical for every classifier compared.
+
+    ``probabilities`` has one column per IGA class in ``IGA_CLASSES`` order. AUC-ROC is computed
+    only over the classes present in ``targets``: a class with zero support (e.g. `sin_lesiones`
+    while training on ACNE04 alone) has no positives, so its one-vs-rest curve is undefined and
+    would drop the whole metric. ``within_one_grade`` is the share of images graded exactly or
+    on a neighbouring grade — what a triage tool can live with — and ``far_errors`` the count that
+    jump two grades or more.
+    """
+    import numpy as np
+    from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score
+
+    labels = list(range(len(IGA_CLASSES)))
+    matrix = confusion_matrix(targets, predictions, labels=labels)
+    y_true = np.array(targets)
+    y_pred = np.array(predictions)
+    accuracy = float(np.mean(y_true == y_pred)) if len(targets) else 0.0
+    f1_macro = float(f1_score(targets, predictions, average="macro", zero_division=0))
+
+    auc_roc_macro: float | None = None
+    present = sorted(set(targets))
+    if len(present) > 1:
+        try:
+            scores = np.array(probabilities)[:, present]
+            scores = scores / np.clip(scores.sum(axis=1, keepdims=True), 1e-12, None)
+            auc_roc_macro = float(
+                roc_auc_score(targets, scores, multi_class="ovr", average="macro", labels=present)
+            )
+        except ValueError:
+            auc_roc_macro = None
+
+    errors = int(np.sum(y_true != y_pred))
+    far_errors = int(np.sum(np.abs(y_true - y_pred) >= 2))
+
+    return {
+        "accuracy": round(accuracy, 6),
+        "f1_macro": round(f1_macro, 6),
+        "auc_roc_macro": None if auc_roc_macro is None else round(auc_roc_macro, 6),
+        "within_one_grade": round(1.0 - far_errors / len(targets), 6) if targets else 0.0,
+        "far_errors": far_errors,
+        "errors": errors,
+        "confusion_matrix": matrix.tolist(),
+        "per_class_metrics": _per_class_metrics(matrix),
+    }
 
 
 def _per_class_metrics(matrix: Any) -> list[dict[str, Any]]:
@@ -157,10 +229,20 @@ def _per_class_metrics(matrix: Any) -> list[dict[str, Any]]:
         false_positive = int(matrix[:, index].sum()) - true_positive
         true_negative = total - true_positive - false_negative - false_positive
 
-        precision = true_positive / (true_positive + false_positive) if true_positive + false_positive else 0.0
-        recall = true_positive / (true_positive + false_negative) if true_positive + false_negative else 0.0
+        precision = (
+            true_positive / (true_positive + false_positive)
+            if true_positive + false_positive
+            else 0.0
+        )
+        recall = (
+            true_positive / (true_positive + false_negative)
+            if true_positive + false_negative
+            else 0.0
+        )
         specificity = (
-            true_negative / (true_negative + false_positive) if true_negative + false_positive else 0.0
+            true_negative / (true_negative + false_positive)
+            if true_negative + false_positive
+            else 0.0
         )
         f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
 

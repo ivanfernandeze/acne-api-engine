@@ -18,31 +18,40 @@ model:
   name: efficientnet_b2       # timm
   pretrained: true            # ImageNet
   num_classes: 5              # sin_lesiones · casi_sin_lesiones · leve · moderado · severo
-  input_size: 260             # entrada nativa de EfficientNet-B2
-  # Transfer learning: cabeza + ultimas capas convolucionales (seccion 8.1)
-  unfreeze_blocks: 3
+  # 320 en lugar de la entrada nativa de 260: las papulas pequenas de ACNE04 (fotos de 1024 px)
+  # desaparecen a 260. Debe coincidir con MODEL_INPUT_SIZE en .env y con --size de preprocess.
+  input_size: 320
+  # Transfer learning (seccion 8.1). v1.0 (3 bloques + cabeza) sobreajusto con F1 test 0,56;
+  # v1.1 entrena toda la red con lr reducido para el backbone (backbone_learning_rate).
+  unfreeze_blocks: all        # entero (bloques finales) | all
+  dropout: 0.3
   progressive_unfreezing: false
 
 training:
-  epochs: 40                  # 30-50 segun la seccion 8.1
-  batch_size: 16              # 16-32 segun VRAM; 16 cabe en los 8 GB de la RTX 5060
+  epochs: 60
+  batch_size: 16              # 16-32 segun VRAM; 16 a 320 px con bf16 cabe en los 8 GB de la RTX 5060
   optimizer: adamw
-  learning_rate: 1.0e-4
+  learning_rate: 1.0e-4       # cabeza
+  backbone_learning_rate: 3.0e-5
   weight_decay: 1.0e-4
   scheduler: cosine
   warmup_epochs: 2
-  # Compensa el desbalance de clases IGA, que en los datasets publicos es severo
+  # Compensa el desbalance de clases IGA, que en los datasets publicos es severo. Con
+  # balanced_sampler activo las clases minoritarias se remuestrean y class_weight se ignora
+  # (ponderar ademas la perdida las contaria dos veces).
   class_weight: balanced
+  balanced_sampler: true
   label_smoothing: 0.05
   early_stopping:
     monitor: val_f1_macro
-    patience: 5
+    patience: 8
     mode: max
-  mixed_precision: true
+  mixed_precision: true       # bfloat16 en CUDA
 
 augmentation:
   # Seccion 8.3. NUNCA se altera el hue: distorsionaria el tono de piel y el
   # eritema, que son justamente la senal que la gradacion evalua.
+  random_resized_crop_scale: [0.7, 1.0]
   rotation_degrees: 15
   horizontal_flip: 0.5
   brightness: 0.10

@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-ModelBackend = Literal["stub", "torch"]
+ModelBackend = Literal["stub", "torch", "gemini"]
 TrackingDriver = Literal["file", "mlflow"]
 
 
@@ -30,13 +30,41 @@ class Settings(BaseSettings):
     log_level: str = "info"
 
     #: ``stub`` keeps the whole clinical pipeline demonstrable before a model exists;
-    #: ``torch`` serves the real EfficientNet-B2. See ``app.models.registry``.
+    #: ``torch`` serves the real EfficientNet-B2; ``gemini`` calls a multimodal LLM over the
+    #: network. Only ``torch`` can ever report ``operational = True``. See ``app.models.registry``.
     model_backend: ModelBackend = "stub"
+    #: Checkpoint family served by the torch backend: any timm classifier saved by
+    #: training/train.py, or an Ultralytics YOLOv8-cls checkpoint (training/train_yolo_cls.py).
+    #: Which one is served follows training/compare.py, the model-selection rule of the thesis.
+    model_arch: Literal["timm", "yolo_cls", "ensemble"] = "timm"
     model_checkpoint_path: str = "./checkpoints/efficientnet_b2_iga.pt"
+    #: With MODEL_ARCH=ensemble: the members, comma-separated as `tag:arch:path:weight`. The
+    #: weight is the model's F1 macro on the frozen test split (training/compare.py), which is
+    #: what the soft vote uses. Every member runs on every image; `prediction` is the combination.
+    #: How the members' readings become one: `mas_confiable` takes the member with the highest
+    #: confidence (its class, its probabilities, its Grad-CAM; ties go to the higher weight);
+    #: `voto_ponderado` averages the five probabilities weighted by each member's F1.
+    ensemble_rule: Literal["mas_confiable", "voto_ponderado"] = "mas_confiable"
+    ensemble_members: str = (
+        "yolov8s-cls:yolo_cls:./checkpoints/yolov8s_cls_iga.pt:0.676,"
+        "efficientnet_b2:timm:./checkpoints/efficientnet_b2_iga.pt:0.633,"
+        "resnet50:timm:./checkpoints/resnet50_iga.pt:0.627"
+    )
     model_seed: int = 42
-    model_input_size: int = 260
+    #: Fallback only: a checkpoint that records its own input size wins over this value.
+    model_input_size: int = 320
 
     enable_gradcam: bool = True
+
+    #: Admission screening (POST /image/screen). `local` runs OpenCV YuNet + heuristics on this
+    #: machine and rejects anything that is not a photograph of a human face; `gemini` delegates to
+    #: the Gemini classifier when it is the active backend; `none` admits everything unchecked.
+    screening_backend: Literal["local", "gemini", "none"] = "local"
+
+    #: Gemini backend. The key lives in `.env`, which is gitignored; never in `.env.example`.
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_timeout_seconds: int = 45
 
     tracking_driver: TrackingDriver = "file"
     tracking_dir: str = "./runs"

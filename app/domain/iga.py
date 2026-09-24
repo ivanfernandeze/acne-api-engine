@@ -38,15 +38,26 @@ IGA_ORDINAL: Final[dict[IgaClass, int]] = {
     "severo": 4,
 }
 
-GagsGrade = Literal["none", "mild", "moderate", "severe", "very_severe"]
+#: Spanish codes since the 2026-09-05 restructuring. IGA was already Spanish, and carrying the two
+#: clinical scales in different languages inside the same row was the kind of inconsistency an
+#: examiner notices first. Changed in lockstep with ``acne-api/src/common/domain/iga.ts``.
+GagsGrade = Literal["sin_acne", "leve", "moderado", "severo", "muy_severo"]
 
 GAGS_GRADES: Final[tuple[GagsGrade, ...]] = (
-    "none",
-    "mild",
-    "moderate",
-    "severe",
-    "very_severe",
+    "sin_acne",
+    "leve",
+    "moderado",
+    "severo",
+    "muy_severo",
 )
+
+GAGS_LABELS: Final[dict[GagsGrade, str]] = {
+    "sin_acne": "Sin acné",
+    "leve": "Leve",
+    "moderado": "Moderado",
+    "severo": "Severo",
+    "muy_severo": "Muy severo",
+}
 
 GAGS_MAX_SCORE: Final[int] = 44
 
@@ -54,14 +65,14 @@ GAGS_MAX_SCORE: Final[int] = 44
 def gags_grade_from_score(score: int) -> GagsGrade:
     """Map a GAGS score (0-44) to its band, per the standard cut-offs (Vasam, 2023)."""
     if score <= 0:
-        return "none"
+        return "sin_acne"
     if score <= 18:
-        return "mild"
+        return "leve"
     if score <= 30:
-        return "moderate"
+        return "moderado"
     if score <= 38:
-        return "severe"
-    return "very_severe"
+        return "severo"
+    return "muy_severo"
 
 
 #: Approximate GAGS score at the centre of each IGA band, used to derive the secondary scale

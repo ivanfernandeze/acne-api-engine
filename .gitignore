@@ -17,14 +17,21 @@ htmlcov/
 .env.local
 !.env.example
 
-# Datasets, checkpoints y corridas: versionados con DVC/MLflow, no con Git.
+# Datasets y corridas: no se versionan con Git.
+# archive/ es ACNE04 (Wu et al., 2019), un dataset de terceros: se descarga aparte (README).
+archive/
 data/
-checkpoints/
 runs/
 mlruns/
+
+# Pesos: por defecto fuera de Git (p. ej. yolov8s-cls.pt o weights/, que Ultralytics descarga solo)...
 *.pt
 *.pth
 *.onnx
+# ...salvo los que el sistema NECESITA para funcionar tras un clone, versionados con Git LFS
+# (.gitattributes): los modelos entrenados de la tesis y el detector facial del cribado.
+!checkpoints/*.pt
+!app/models/assets/*.onnx
 
 .DS_Store
 Thumbs.db

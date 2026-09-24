@@ -124,8 +124,18 @@ def class_weights(samples: list[Sample]) -> list[float]:
     return weights
 
 
-def build_torch_dataset(samples: list[Sample], input_size: int, train: bool) -> Any:
-    """Create a torchvision dataset. Imported lazily: the engine runs without torch."""
+def build_torch_dataset(
+    samples: list[Sample],
+    input_size: int,
+    train: bool,
+    crop_scale: tuple[float, float] | None = None,
+) -> Any:
+    """Create a torchvision dataset. Imported lazily: the engine runs without torch.
+
+    ``crop_scale`` enables ``RandomResizedCrop`` (area fraction range) for the train split. A
+    random crop of 70-100 % of the face still contains lesions of every zone, so the label holds,
+    while the model stops seeing the exact same pixels every epoch.
+    """
     import torch
     from PIL import Image
     from torch.utils.data import Dataset
@@ -135,9 +145,14 @@ def build_torch_dataset(samples: list[Sample], input_size: int, train: bool) -> 
     std = (0.229, 0.224, 0.225)
 
     if train:
+        resize: Any = (
+            transforms.Resize((input_size, input_size))
+            if crop_scale is None
+            else transforms.RandomResizedCrop(input_size, scale=crop_scale, ratio=(0.9, 1.1))
+        )
         pipeline = transforms.Compose(
             [
-                transforms.Resize((input_size, input_size)),
+                resize,
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomRotation(degrees=15),
                 # Saturation and hue stay at zero on purpose (seccion 8.3).
@@ -166,3 +181,21 @@ def build_torch_dataset(samples: list[Sample], input_size: int, train: bool) -> 
             return pipeline(image), torch.tensor(IGA_CLASSES.index(sample.iga_class))
 
     return IgaDataset()
+
+
+def balanced_sampler(samples: list[Sample], seed: int) -> Any:
+    """Sampler that draws every class with equal probability (with replacement).
+
+    Complements the loss weights: weighting only rescales the gradient of the rare `severo`
+    images, but the model still sees them a handful of times per epoch. Resampling puts them in
+    front of the network as often as the majority classes.
+    """
+    import torch
+    from torch.utils.data import WeightedRandomSampler
+
+    counts = class_distribution(samples)
+    per_sample = [1.0 / counts[sample.iga_class] for sample in samples]
+    generator = torch.Generator().manual_seed(seed)
+    return WeightedRandomSampler(
+        per_sample, num_samples=len(samples), replacement=True, generator=generator
+    )

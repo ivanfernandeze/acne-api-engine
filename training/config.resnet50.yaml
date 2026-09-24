@@ -1,0 +1,89 @@
+# =============================================================================
+# Configuracion de entrenamiento — ResNet-50 (linea base) sobre escala IGA. Misma receta v1.1 que
+# config.yaml; solo cambia model.name, para que la comparativa mida la arquitectura y nada mas.
+# Fases 4 y 5 de CRISP-DM. Seccion 8.1 del documento maestro.
+#
+# Referencia de calibracion: Watanabe (2025) — 90,0 % exactitud, F1 macro 0,885,
+# AUC-ROC macro 0,998 sobre 349 imagenes faciales con IGA.
+# Criterio de exito declarado en la Fase 1: replicar >= 85 % de ese F1 macro,
+# es decir F1 macro >= 0,752 sobre el test congelado.
+# =============================================================================
+
+seed: 42                      # RNF-03: fija todo el pipeline
+dataset_version: v1.0
+data_dir: ./data/prepared
+output_dir: ./checkpoints
+tracking_dir: ./runs
+
+model:
+  name: resnet50              # timm — linea base clasica para la seleccion de modelo
+  pretrained: true            # ImageNet
+  num_classes: 5              # sin_lesiones · casi_sin_lesiones · leve · moderado · severo
+  # 320 en lugar de la entrada nativa de 260: las papulas pequenas de ACNE04 (fotos de 1024 px)
+  # desaparecen a 260. Debe coincidir con MODEL_INPUT_SIZE en .env y con --size de preprocess.
+  input_size: 320
+  # Transfer learning (seccion 8.1). v1.0 (3 bloques + cabeza) sobreajusto con F1 test 0,56;
+  # v1.1 entrena toda la red con lr reducido para el backbone (backbone_learning_rate).
+  unfreeze_blocks: all        # entero (bloques finales) | all
+  dropout: 0.3
+  progressive_unfreezing: false
+
+training:
+  epochs: 60
+  batch_size: 16              # 16-32 segun VRAM; 16 a 320 px con bf16 cabe en los 8 GB de la RTX 5060
+  optimizer: adamw
+  learning_rate: 1.0e-4       # cabeza
+  backbone_learning_rate: 3.0e-5
+  weight_decay: 1.0e-4
+  scheduler: cosine
+  warmup_epochs: 2
+  # Compensa el desbalance de clases IGA, que en los datasets publicos es severo. Con
+  # balanced_sampler activo las clases minoritarias se remuestrean y class_weight se ignora
+  # (ponderar ademas la perdida las contaria dos veces).
+  class_weight: balanced
+  balanced_sampler: true
+  label_smoothing: 0.05
+  early_stopping:
+    monitor: val_f1_macro
+    patience: 8
+    mode: max
+  mixed_precision: true       # bfloat16 en CUDA
+
+augmentation:
+  # Seccion 8.3. NUNCA se altera el hue: distorsionaria el tono de piel y el
+  # eritema, que son justamente la senal que la gradacion evalua.
+  random_resized_crop_scale: [0.7, 1.0]
+  rotation_degrees: 15
+  horizontal_flip: 0.5
+  brightness: 0.10
+  contrast: 0.10
+  saturation: 0.0
+  hue: 0.0
+  cutmix_probability: 0.15
+
+preprocessing:
+  face_detector: mtcnn        # mtcnn | retinaface | none
+  crop_margin: 0.15
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std: [0.229, 0.224, 0.225]
+
+splits:
+  # 80/10/10 estratificados por clase IGA y grupo etario (seccion 8.2).
+  # El test queda CONGELADO para toda la tesis.
+  train: 0.8
+  val: 0.1
+  test: 0.1
+  stratify_by: [iga_class, age_group]
+
+evaluation:
+  cross_validation_folds: 5   # validacion cruzada estratificada durante el desarrollo
+  metrics:
+    - accuracy
+    - f1_macro
+    - f1_per_class
+    - auc_roc_macro
+    - sensitivity
+    - specificity
+    - confusion_matrix
+  # Auditoria exploratoria de equidad por fototipo (Fitzpatrick17k, seccion 8.2)
+  fairness_audit_by: fitzpatrick

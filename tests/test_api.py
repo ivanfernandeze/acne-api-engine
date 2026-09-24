@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+from typing import get_args
 
 from fastapi.testclient import TestClient
 
+from app.config import ModelBackend
 from app.main import app
 
 client = TestClient(app)
@@ -18,7 +20,9 @@ def test_health_reports_the_backend() -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["service"] == "acne-ai-engine"
-    assert payload["model_backend"] in {"stub", "torch"}
+    # Tracks the declared union instead of a hand-written list, so adding a backend without
+    # widening the response schema fails here rather than at runtime with a 500.
+    assert payload["model_backend"] in set(get_args(ModelBackend))
 
 
 def test_infer_single_returns_the_contract_of_section_9_1(sample_image: bytes) -> None:

@@ -12,6 +12,8 @@ dependencies = [
     "scipy>=1.14.0",
     "pillow>=10.4.0",
     "python-multipart>=0.0.12",
+    # Runtime HTTP client for the Gemini backend (app/models/gemini_backend.py).
+    "httpx>=0.27.0",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +28,11 @@ torch = [
     "facenet-pytorch>=2.6.0",
     "scikit-learn>=1.5.0",
     "mlflow>=2.17.0",
+    # YOLOv8 (clasificacion y deteccion) y el evaluador COCO comun a ambos detectores. Ultralytics
+    # es AGPL-3.0: admisible en el prototipo academico, declarado en 04_modeling.md.
+    "ultralytics>=8.3",
+    "torchmetrics>=1.4",
+    "pycocotools>=2.0",
 ]
 dev = [
     "pytest>=8.3.0",
@@ -58,7 +65,10 @@ disallow_untyped_defs = true
 plugins = []
 
 [[tool.mypy.overrides]]
-module = ["scipy.*", "PIL.*", "timm.*", "captum.*", "torch.*", "torchvision.*", "sklearn.*", "mlflow.*"]
+module = [
+    "scipy.*", "PIL.*", "timm.*", "captum.*", "torch.*", "torchvision.*", "sklearn.*", "mlflow.*",
+    "ultralytics.*", "torchmetrics.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

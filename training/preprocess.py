@@ -77,7 +77,9 @@ def main() -> None:
                 target_path = target_dir / f"{image_path.stem}.png"
                 resized.save(target_path, format="PNG", optimize=True)
 
-                rows.append({"path": str(target_path), "iga_class": iga_class, "age": "", "fitzpatrick": ""})
+                rows.append(
+                    {"path": str(target_path), "iga_class": iga_class, "age": "", "fitzpatrick": ""}
+                )
                 stats[iga_class] += 1
             except Exception as error:  # noqa: BLE001 - one bad file must not stop the batch
                 skipped.append(f"{image_path}: {error}")

@@ -7,6 +7,17 @@ and a fixed seed keeps every generated image byte-identical across runs (RNF-03)
 from __future__ import annotations
 
 import io
+import os
+
+# The suite pins the stub backend BEFORE anything imports `app`, because `Settings` reads `.env`
+# and `get_classifier` caches its answer for the life of the process. Without this, a developer
+# with `MODEL_BACKEND=gemini` in their `.env` would send every test image to a paid external API
+# and make the contract tests depend on the network — and `test_infer_single_is_deterministic`
+# would be asserting the determinism of a remote LLM, which nothing guarantees.
+# `GeminiClassifier` is exercised by `test_gemini_backend.py`, which calls no API at all.
+os.environ["MODEL_BACKEND"] = "stub"
+# The local screener is unit-tested on its own; the route tests want the "nothing screens" path.
+os.environ["SCREENING_BACKEND"] = "none"
 
 import pytest
 from PIL import Image

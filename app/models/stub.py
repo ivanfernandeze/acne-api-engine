@@ -18,7 +18,7 @@ import math
 from PIL import Image, ImageDraw, ImageFilter
 
 from app.domain.iga import IGA_CLASSES, IgaClass
-from app.models.base import ClassificationResult
+from app.models.base import ClassificationResult, ClinicalContext
 
 STUB_VERSION = "stub-deterministic-v0"
 
@@ -30,12 +30,22 @@ class StubClassifier:
     backend: str = "stub"
     weights_checksum: str | None = None
     operational: bool = False
+    kind: str = "stub"
 
     def __init__(self, seed: int = 42, enable_gradcam: bool = True) -> None:
         self._seed = seed
         self._enable_gradcam = enable_gradcam
 
-    def predict(self, image_bytes: bytes, mime_type: str) -> ClassificationResult:
+    def predict(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        context: ClinicalContext | None = None,
+    ) -> ClassificationResult:
+        # `context` is accepted and ignored on purpose: the protocol has to be uniform so that
+        # swapping backends never changes the caller. A hash of the bytes has nothing to say about
+        # a clinical history, and pretending otherwise would fabricate a reading.
+        del context
         digest = hashlib.sha256(image_bytes + str(self._seed).encode("utf-8")).digest()
 
         # Byte 0 selects the class; bytes 1-2 shape the confidence. Both are stable for a given

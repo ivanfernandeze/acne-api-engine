@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.config import get_settings
 from app.models.registry import get_classifier
-from app.routers import audit, health, infer, model, stats
+from app.routers import audit, health, infer, model, screening, stats
 
 DISCLAIMER = (
     "Herramienta de apoyo diagnóstico con fines de investigación académica. No sustituye el "
@@ -90,6 +90,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(infer.router)
+app.include_router(screening.router)
 app.include_router(model.router)
 app.include_router(audit.router)
 app.include_router(stats.router)

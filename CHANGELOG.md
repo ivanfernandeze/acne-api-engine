@@ -3,6 +3,174 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/);
 versionado con [SemVer](https://semver.org/lang/es/).
 
+## [No publicado]
+
+### Changed — imagen Docker con los modelos reales (23/09/2026)
+
+- `WITH_TORCH=1` por defecto. Instala `torch==2.11.0`/`torchvision==0.26.0` desde `TORCH_INDEX`
+  (CPU por defecto; `cu128` para NVIDIA) y `timm`, `captum`, `scikit-learn` y `ultralytics` en las
+  versiones con que se entrenó. **Ya no usa el extra `.[torch]`**, que arrastraba `facenet-pytorch`
+  (fija `torch<2.3`).
+- Se añaden `libgl1` y `libglib2.0-0`, que OpenCV (cribado local) necesita en la imagen slim.
+- `start-period` del healthcheck de 20 a 90 s (carga de tres modelos en CPU).
+
+### Changed — regla del ensemble: gana el más seguro (18/09/2026)
+
+- **`ENSEMBLE_RULE=mas_confiable`** (nuevo, por defecto): `prediction` es la lectura íntegra del
+  miembro con mayor confianza —clase, vector y Grad-CAM—, con empate al de mayor peso; ya no se
+  promedia nada. Motivo: el porcentaje de la sugerencia debe cuadrar con lo que un modelo leyó
+  (petición del especialista). `voto_ponderado` conserva el promedio ponderado por F1. `version`
+  pasa a `ensemble-max[…]` / `ensemble-avg[…]`. Test (n = 142): 0,746 / 0,668 / 0,916 frente a
+  0,746 / 0,661 / 0,928 del voto ponderado —mismo número de aciertos (106 de 142), distinto reparto por clase—
+  (`training/evaluate_ensemble.py --rule`, `runs/v1.0/metrics-test-ensemble-{max,avg}.json`).
+  `tests/test_ensemble_backend.py` cubre ambas reglas.
+
+### Added — cribado local de admisión (17/09/2026)
+
+- **`LocalScreener`** (`app/models/local_screener.py`, `SCREENING_BACKEND=local` por defecto). Hasta
+  ahora `POST /image/screen` solo cribaba con Gemini; con la CNN en servicio respondía
+  `checked: false` y el registro admitía cualquier imagen — un retrato a lápiz se archivó como
+  fotografía clínica. El cribado local corre en la máquina (OpenCV YuNet + tono de piel +
+  saturación) y rechaza lo que no sea la fotografía de un rostro humano; calibrado sobre ACNE04
+  (0,43 % de fotos reales rechazadas). Límite: ilustraciones coloreadas con piel realista.
+  `get_screener()` en `registry.py` desacopla el cribado del clasificador. `tests/test_local_screener.py`.
+
+### Added — selección de modelo y segundo componente (17/09/2026)
+
+- **Comparativa de clasificadores sobre el mismo test congelado.** `training/train.py` acepta
+  `--model` (cualquier timm) y `--tag`; el checkpoint guarda `model_name`. `training/evaluate.py`
+  acepta `--checkpoint`, `--tag`, `--no-primary` y expone `compute_metrics()` (una sola definición
+  del conjunto de métricas de la Sección 8.5, con la nueva exactitud a ±1 grado). Nuevos:
+  `training/config.resnet50.yaml`, `training/export_yolo_cls.py` (split por *hard links*),
+  `training/train_yolo_cls.py` (YOLOv8-cls con hue/saturación a 0 y RandAugment apagado;
+  `--folds` para la CV con los mismos folds que `cross_validate`) y `training/compare.py` (tabla y
+  regla de selección: F1 macro en test, empate < 0,01 → EfficientNet-B2).
+- **Resultado (test, n = 142):** YOLOv8s-cls F1 0,676 / exactitud 0,739 / AUC 0,925 (CV 5-fold
+  0,753 ± 0,055); EfficientNet-B2 0,633 / 0,704 / 0,896; ResNet-50 0,627 / 0,697 / 0,905.
+- **Ensemble servido (`MODEL_ARCH=ensemble`, `app/models/ensemble_backend.py`).** Los tres modelos
+  se ejecutan a la par sobre cada imagen; `prediction` es el promedio de probabilidades ponderado
+  por el F1 de cada uno (`ENSEMBLE_MEMBERS=tag:arch:path:peso`), y la respuesta lleva `members[]`
+  (clase, confianza, vector, Grad-CAM propio, versión, checksum, latencia) y `agreement`
+  (`unanime|mayoria|discrepancia`). Un miembro que no carga tira abajo el backend (no se sirve un
+  ensemble a medias). `/audit/iia-check` añade `ensemble_members`. Test: 0,747 / 0,662 / 0,928
+  (`training/evaluate_ensemble.py`). `tests/test_ensemble_backend.py`.
+- **Backend torch multi-arquitectura.** `MODEL_ARCH=timm|yolo_cls`: `torch_backend.py` carga
+  cualquier timm (`model_name` del checkpoint, Grad-CAM sobre la última capa convolucional
+  encontrada) o un YOLOv8-cls de Ultralytics (normalización 0-1, cabeza `(probs, logits)`, mapeo de
+  las clases del checkpoint a `IGA_CLASSES`; `sin_lesiones` → 0). `tests/test_torch_backend.py`.
+- **Pipeline de detección de lesiones (`training/detection/`), pendiente de datos.** Ingesta
+  VOC → YOLO con el MISMO test congelado que el clasificador, entrenadores YOLOv8-det y Faster
+  R-CNN ResNet-50 FPN, y un evaluador común (mAP50/50-95, precisión/recall, MAE y correlación del
+  conteo, concordancia Hayashi por conteo). Probado con un fixture sintético
+  (`tests/test_detection_pipeline.py`; `ACNE_SMOKE_DETECTORS=1` entrena una época de cada uno).
+  La mitad *Detection* de ACNE04 no está en disco: ver README.
+- Dependencias: `ultralytics` (AGPL-3.0, declarado), `torchmetrics`, `pycocotools`.
+
+### Added
+
+- **Primera CNN real entrenada (17/09/2026).** `MODEL_BACKEND=torch` deja de ser una promesa:
+  `checkpoints/efficientnet_b2_iga.pt` (run `20260917T031206Z`, v1.1) se entrenó sobre ACNE04 y
+  `GET /health` responde `model_operational: true`. Sobre el test congelado (n = 142): exactitud
+  0,704, F1 macro 0,633, AUC-ROC macro 0,896; **no alcanza** el 0,752 de la Fase 1 y todos los
+  errores son entre grados adyacentes. Metodología y números en
+  `acne-infra/docs/02_data_understanding.md` … `05_evaluation.md`.
+- `training/ingest_acne04.py` — lleva `archive/acne_1024/all_1024` al layout
+  `data/raw/<clase_iga>/` que espera `preprocess.py`, con el mapeo Hayashi → IGA
+  (`levle0→casi_sin_lesiones`, `1→leve`, `2→moderado`, `3→severo`; `sin_lesiones` queda sin
+  muestras porque ACNE04 no tiene piel sana).
+- `training/cross_validate.py` — validación cruzada estratificada k-fold sobre train + val con la
+  misma receta que `train.py` (`fit()` compartido); el test congelado nunca participa. Escribe
+  `runs/<dataset_version>/cv-<run_id>.json` con media ± desviación.
+- `train.py` implementa lo que `config.yaml` ya declaraba y se ignoraba: `warmup_epochs`,
+  `mixed_precision` (bfloat16), `cutmix_probability`; y añade `unfreeze_blocks: all`,
+  `backbone_learning_rate`, `balanced_sampler`, `dropout` y `random_resized_crop_scale`. El
+  checkpoint guarda además `input_size`.
+
+### Changed
+
+- **Receta v1.1** en `config.yaml`: entrada 320 px (antes 260), backbone completo con lr 3e-5 y
+  cabeza 1e-4, sampler balanceado en lugar de pesos en la pérdida, CutMix, 60 épocas con paciencia 8.
+  La v1.0 literal de la Sección 8.1 sobreajustaba (F1 test 0,560) y queda registrada como
+  `runs/v1.0/20260917T024935Z/` y `checkpoints/efficientnet_b2_iga.v1.0-baseline.pt`.
+- `.env`: `MODEL_BACKEND=torch`, `MODEL_INPUT_SIZE=320`.
+- `evaluate.py` calcula el AUC-ROC solo sobre las clases presentes en el split; con `sin_lesiones`
+  vacía `roc_auc_score` lanzaba y la métrica salía `null`.
+- `facenet-pytorch` no se instala: fija `torch < 2.3`, incompatible con el wheel cu128 que exige la
+  RTX 5060. Preprocesado e inferencia usan el recorte cuadrado centrado ya previsto como alternativa.
+
+- **Los grados GAGS pasan a español**: `none` → `sin_acne`, `mild` → `leve`, `moderate` →
+  `moderado`, `severe` → `severo`, `very_severe` → `muy_severo`. La escala IGA ya estaba en español
+  y llevar las dos escalas clínicas en idiomas distintos dentro de la misma fila era la clase de
+  incoherencia que se nota primero en la defensa. Espejo exacto de
+  `acne-api/src/common/domain/iga.ts`, cambiado en el mismo commit; `GAGS_LABELS` se añade aquí para
+  que las dos copias sigan siendo comparables línea a línea.
+
+### Added
+
+- **Cribado de admisión** — `POST /image/screen` decide si una imagen es una fotografía facial
+  evaluable. **No emite ningún juicio clínico**: la respuesta no tiene campo para gravedad,
+  lesiones ni clase IGA, y el prompt lo prohíbe. Corre en la admisión, que ocurre en las dos
+  condiciones del experimento, así que revelar algo de la enfermedad metería la intervención en el
+  pretest (RF-TR-01); una prueba comprueba la forma del tipo, no solo su comportamiento.
+  **No busca acné**: `sin_lesiones` es una clase IGA válida y una cara limpia en un control es un
+  caso resuelto. Un rostro sano se admite.
+  Antes de gastar una llamada, una guardia local rechaza en ~10 ms lo que no tiene detalle alguno
+  —lienzo en blanco, color plano— midiendo la desviación típica con PIL.
+  El veredicto se **deriva** de `subject`, no se toma del campo `acceptable`: el modelo puede
+  contradecirse, y creerle anularía la comprobación.
+- `ImageScreener`, capacidad opcional separada de `Classifier`. Un backend que no sabe examinar
+  imágenes responde `checked: false` en vez de fabricar un veredicto.
+- 19 pruebas del cribado, ninguna llama a la API.
+- **Lectura clínica razonada** (revisión de prompt `p2`). El modelo ya no devuelve solo una clase y
+  cinco probabilidades: emite su lectura del caso en prosa, las lesiones elementales que distingue,
+  las zonas comprometidas, **por qué esa clase IGA y no la contigua**, diagnósticos diferenciales,
+  aspectos de manejo a valorar y las banderas que aporta la historia clínica. Una clase sin
+  fundamento solo se puede creer o ignorar, y ninguna de las dos cosas es juicio clínico.
+- **La anamnesis entra como contexto.** `POST /infer/single` acepta `clinical_context` con edad,
+  sexo, fototipo y las respuestas del cuestionario. El prompt impone que **la severidad la fija la
+  fotografía**: la historia contextualiza y levanta banderas, pero no gradúa — si no, un paciente
+  que declara «acné severo» podría inducir la clase que mide OE2.
+- `ClinicalContext` y `ClinicalAssessment` en el protocolo `Classifier`. El stub y el backend torch
+  aceptan el contexto y lo descartan explícitamente: una CNN ve píxeles, y fingir lo contrario
+  fabricaría una lectura. Su `assessment` es `None`, que es el valor honesto.
+- `gags_secondary` usa ahora el GAGS que estima el propio modelo cuando lo hay, en lugar del centro
+  de la banda IGA, que era una conveniencia de presentación.
+- 8 pruebas más del validador y del turno que acompaña a la imagen. Ninguna llama a la API.
+- **Backend `gemini`** (`app/models/gemini_backend.py`) — clasificador respaldado por un LLM
+  multimodal externo, para poder medir el TPD antes de que exista una CNN entrenada. Transporte con
+  `httpx` contra `generateContent`, `responseSchema` para salida estructurada y `temperature: 0`.
+  Reporta `operational: false` **aunque funcione**: no es la CNN que fija la Sección 8.1.
+- `model_kind` ∈ `stub | cnn | llm_externo` en `GET /audit/iia-check`, con dos avisos propios del
+  caso Gemini. Dos backends pueden fallar la verificación de IIA por razones que no se parecen en
+  nada, y hasta ahora la auditoría no permitía distinguirlas.
+- **Regiones señaladas por el modelo** en lugar de Grad-CAM: se le piden los rectángulos de las
+  zonas más afectadas y se dibujan sobre la imagen. Es lo que el modelo dice haber mirado, no una
+  atribución de gradiente, y viaja por el mismo campo `heatmap_png`.
+- 17 pruebas del validador de respuestas, **ninguna llama a la API**.
+
+### Changed
+
+- `MODEL_BACKEND` admite `"gemini"`; `HealthResponse`, `InferSingleResponse` e `IiaCheckResponse`
+  amplían su unión `model_backend`.
+
+### Fixed
+
+- `tests/conftest.py` fija `MODEL_BACKEND=stub` antes de importar `app`. Sin eso, un `.env` con
+  `MODEL_BACKEND=gemini` hacía que las pruebas de contrato llamaran a la API de verdad —gastando
+  cuota, dependiendo de la red y, peor, afirmando el determinismo de un modelo remoto que nadie
+  garantiza.
+- `GET /health` devolvía 500 con el backend Gemini activo: `model_backend` seguía declarado como
+  `Literal["stub", "torch"]` y la serialización fallaba. La prueba ahora comprueba contra
+  `get_args(ModelBackend)` en vez de una lista escrita a mano.
+
+### Notes
+
+- Medición del 03/09/2026 sobre los 30 casos sintéticos con `gemini-2.5-flash`: **TPD 73,33 %**
+  (22/30 exactos, **30/30 dentro de ±1 clase**), mediana 8 712 ms y p95 11 748 ms. La latencia
+  **excede** el techo de 8 000 ms que RNF-01 fija para CPU, y el propio `/audit/iia-check` lo
+  advierte. Las imágenes son sintéticas: la cifra mide la integración, no precisión clínica.
+
+
 ## [0.1.0] — 2026-08-31
 
 ### Added
