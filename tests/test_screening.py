@@ -112,7 +112,8 @@ def test_the_result_type_carries_nothing_clinical() -> None:
     # severity would be a hole in RF-TR-01 waiting for someone to fill it.
     fields = set(ScreeningResult.__dataclass_fields__)
 
-    assert fields == {"acceptable", "subject", "issues", "reason"}
+    # `pose` / `yaw_ratio` are head geometry (frontal vs. profile), not a reading of the skin.
+    assert fields == {"acceptable", "subject", "issues", "reason", "pose", "yaw_ratio"}
     for forbidden in ("iga", "class", "severity", "lesion", "gags", "confidence"):
         assert not any(forbidden in name for name in fields)
 

@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     #: the Gemini classifier when it is the active backend; `none` admits everything unchecked.
     screening_backend: Literal["local", "gemini", "none"] = "local"
 
+    #: Acne gate in front of the IGA classifier (POST /infer/single): an image that does not show
+    #: acne (freckles, vitiligo, other dermatoses, a healthy face) is answered `verdict: no_acne`
+    #: and is NOT graded. Without the checkpoint the engine grades everything, as before, and
+    #: reports `gate_checked: false`. The threshold defaults to the one stored in the checkpoint.
+    acne_gate_enabled: bool = True
+    acne_gate_checkpoint: str = "./checkpoints/acne_gate.pt"
+    acne_gate_threshold: float | None = None
+
     #: Gemini backend. The key lives in `.env`, which is gitignored; never in `.env.example`.
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"

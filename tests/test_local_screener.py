@@ -16,7 +16,7 @@ from PIL import Image
 cv2 = pytest.importorskip("cv2")
 
 from app.models.base import ImageScreener, ScreeningResult  # noqa: E402
-from app.models.local_screener import Face, LocalScreener  # noqa: E402
+from app.models.local_screener import Face, LocalScreener, estimate_pose  # noqa: E402
 
 
 def _png(array: np.ndarray) -> bytes:
@@ -78,17 +78,36 @@ def test_rejects_images_with_no_human_face(screener: LocalScreener, kind: str) -
     assert "rostro" in result.reason
 
 
-def _with_fake_face(screener: LocalScreener, score: float) -> None:
+def _landmarks(nose_offset: float, width: float = 160.0) -> tuple[tuple[float, float], ...]:
+    """Eyes 64 px apart around x = 160; the nose shifted by ``nose_offset`` face widths."""
+    return (
+        (128.0, 120.0),
+        (192.0, 120.0),
+        (160.0 + nose_offset * width, 160.0),
+        (136.0, 200.0),
+        (184.0, 200.0),
+    )
+
+
+def _with_fake_face(
+    screener: LocalScreener, score: float, nose_offset: float | None = None
+) -> None:
     def fake(image):  # type: ignore[no-untyped-def]
         h, w = image.shape[:2]
         scale = 640 / max(h, w)
         analysed = cv2.resize(image, (int(w * scale), int(h * scale)))
+        landmarks = (
+            ()
+            if nose_offset is None
+            else tuple((x * scale, y * scale) for x, y in _landmarks(nose_offset))
+        )
         face = Face(
             x=int(80 * scale),
             y=int(60 * scale),
             width=int(160 * scale),
             height=int(200 * scale),
             score=score,
+            landmarks=landmarks,
         )
         return [face], analysed
 
@@ -100,6 +119,40 @@ def test_accepts_a_detected_face_with_real_skin_colour(screener: LocalScreener) 
     # PIL writes RGB; the screener decodes to BGR, so the fixture is built as RGB.
     result = screener.screen(_png(_skin_face(saturated=True)), "image/png")
     assert result == ScreeningResult(acceptable=True, subject="rostro_humano", issues=(), reason="")
+
+
+@pytest.mark.parametrize(
+    ("nose_offset", "expected"),
+    [
+        (0.0, "frontal"),
+        (0.02, "frontal"),
+        (0.15, "nariz_derecha"),
+        (-0.15, "nariz_izquierda"),
+        (0.05, "indeterminado"),
+    ],
+)
+def test_reports_the_head_pose_from_the_landmarks(
+    screener: LocalScreener, nose_offset: float, expected: str
+) -> None:
+    _with_fake_face(screener, score=0.9, nose_offset=nose_offset)
+    result = screener.screen(_png(_skin_face()), "image/png")
+    assert result.acceptable is True
+    assert result.pose == expected
+    assert result.yaw_ratio == pytest.approx(nose_offset, abs=0.01)
+
+
+def test_a_low_score_detection_gives_no_pose() -> None:
+    # Cheek close-ups: YuNet half-recognises them (scores 0,30-0,51) and its landmarks point
+    # nowhere. They must not be read as a frontal face that would then be refused as a profile.
+    face = Face(x=0, y=0, width=160, height=200, score=0.45, landmarks=_landmarks(0.0))
+    assert estimate_pose(face) == ("indeterminado", None)
+
+
+def test_no_landmarks_gives_no_pose() -> None:
+    assert estimate_pose(Face(x=0, y=0, width=160, height=200, score=0.9)) == (
+        "indeterminado",
+        None,
+    )
 
 
 def test_rejects_a_detected_face_without_skin_colour_as_an_illustration(

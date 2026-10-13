@@ -18,6 +18,9 @@ import os
 os.environ["MODEL_BACKEND"] = "stub"
 # The local screener is unit-tested on its own; the route tests want the "nothing screens" path.
 os.environ["SCREENING_BACKEND"] = "none"
+# Same for the acne gate: a checkpoint on disk must not decide which test images get graded. The
+# gate path is exercised with a fake gate (test_acne_gate.py).
+os.environ["ACNE_GATE_ENABLED"] = "false"
 
 import pytest
 from PIL import Image

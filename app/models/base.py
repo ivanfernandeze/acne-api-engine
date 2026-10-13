@@ -73,6 +73,12 @@ ImageSubject = Literal[
 ]
 
 
+#: Which way the head points in the picture: geometry only, nothing about the skin. ``nariz_*`` is
+#: the side of the IMAGE the nose points to, not the patient's side — a mirrored selfie flips it,
+#: so turning this into "perfil derecho/izquierdo" is the caller's call, not the screener's.
+HeadPose = Literal["frontal", "nariz_derecha", "nariz_izquierda", "indeterminado"]
+
+
 @dataclass(frozen=True)
 class ScreeningResult:
     """Whether an image may enter the clinical record at all.
@@ -98,6 +104,12 @@ class ScreeningResult:
     issues: tuple[str, ...] = ()
     #: One sentence addressed to whoever took the photograph, saying what to fix.
     reason: str = ""
+    #: Head orientation, so the caller can tell a frontal shot from a profile. Like the rest of this
+    #: type it is identical in both experimental conditions and says nothing about the disease.
+    pose: HeadPose = "indeterminado"
+    #: Horizontal offset of the nose from the midpoint of the eyes, as a share of the face width.
+    #: Positive = nose towards the right edge of the image. ``None`` when not measured.
+    yaw_ratio: float | None = None
 
 
 @runtime_checkable
@@ -111,6 +123,51 @@ class ImageScreener(Protocol):
 
     def screen(self, image_bytes: bytes, mime_type: str) -> ScreeningResult:
         """Decide whether the image may enter the clinical record."""
+        ...
+
+
+#: What the gate saw: acne (graded as usual), healthy skin (freckles included — they are a normal
+#: variant, not a disease) or some other condition (vitiligo, psoriasis, rosacea…).
+GateLabel = Literal["acne", "sana", "otra"]
+
+
+@dataclass(frozen=True)
+class GateResult:
+    """What an image shows, decided BEFORE any grading."""
+
+    label: GateLabel
+    #: The gate's probability that the image shows acne.
+    acne_probability: float
+    #: The acne cut it was compared against; recorded so a verdict can be re-read (RNF-03).
+    threshold: float
+    #: Probability of each label, for the record.
+    probabilities: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def is_acne(self) -> bool:
+        return self.label == "acne"
+
+
+@runtime_checkable
+class AcneGate(Protocol):
+    """Filter in front of the IGA classifier: acne, healthy skin, or another condition.
+
+    The five IGA classes are a closed set learned from ACNE04 alone, which holds acne and nothing
+    but acne — not even a clean face — so the classifier grades whatever it is shown: freckles,
+    vitiligo, psoriasis and a clean face all come out as some grade of acne, and `sin_lesiones` is
+    never suggested. The gate is trained with those negatives: healthy skin is answered as
+    `sin_lesiones`, another condition is stopped, and only acne reaches the IGA models.
+
+    Unlike the screener this IS a clinical judgement, which is why it lives in ``/infer/single``
+    and never in ``/image/screen``: inference is not invoked in the pretest, so nothing it says can
+    leak into that condition (RF-TR-01).
+    """
+
+    version: str
+    weights_checksum: str
+
+    def check(self, image_bytes: bytes, mime_type: str) -> GateResult:
+        """Decide whether the image shows acne."""
         ...
 
 

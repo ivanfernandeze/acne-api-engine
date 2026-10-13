@@ -21,6 +21,13 @@ pencil portrait was filed as a clinical photograph. This screener runs entirely 
 What it says nothing about, on purpose: lesions, severity, grade. It runs at intake, in both
 experimental conditions, and must leave no clinical trace (see ``routers/screening.py``).
 Quality remarks (framing, focus, lighting) are warnings that never block.
+
+It also reports the **head pose** (frontal or turned, and towards which side of the image), read
+from the five YuNet landmarks, so acne-api can tell a frontal shot from a profile filed in the wrong
+slot. Geometry only — the same in both conditions, silent about the skin. Calibrated on 400 ACNE04
+photographs (``training/calibrate_pose.py``): frontal faces sit at |yaw| < 0,03, a face turned
+~30° already reaches 0,06, profiles spread to 0,30; cheek close-ups that YuNet half-recognises come
+with scores 0,30-0,51 and landmarks that point nowhere, hence ``POSE_MIN_SCORE``.
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.models.base import ScreeningResult
+from app.models.base import HeadPose, ScreeningResult
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 YUNET_MODEL = ASSETS / "face_detection_yunet_2023mar.onnx"
@@ -54,6 +61,11 @@ BRIGHT_MEAN = 235.0
 #: YuNet also fires on ears and cheek edges next to a large face, at scores up to 0,9 but small.
 SECOND_FACE_SCORE = 0.8
 SECOND_FACE_AREA_RATIO = 0.25
+#: Head pose. Below this detection score the landmarks are guesses (cheek close-ups): no pose.
+POSE_MIN_SCORE = 0.6
+#: |yaw| under this is frontal; at or above TURNED it is a turned head. In between: undecided.
+FRONTAL_MAX_YAW = 0.04
+TURNED_MIN_YAW = 0.06
 
 
 @dataclass(frozen=True)
@@ -65,6 +77,28 @@ class Face:
     width: int
     height: int
     score: float
+    #: YuNet's five points as (x, y): right eye, left eye, nose tip, right and left mouth corner
+    #: ("right" is the subject's). Empty when the detector did not provide them.
+    landmarks: tuple[tuple[float, float], ...] = ()
+
+
+def estimate_pose(face: Face) -> tuple[HeadPose, float | None]:
+    """Which way the head points, from the nose's offset to the midpoint of the eyes.
+
+    In a frontal face the nose tip sits between the eyes; as the head turns, it slides towards the
+    side it points to while the eyes stay roughly put. The offset is scaled by the face width so it
+    does not depend on resolution or distance.
+    """
+    if face.score < POSE_MIN_SCORE or len(face.landmarks) < 3 or face.width <= 0:
+        return "indeterminado", None
+    (right_eye_x, _), (left_eye_x, _), (nose_x, _) = face.landmarks[:3]
+    yaw = (nose_x - (right_eye_x + left_eye_x) / 2) / face.width
+    yaw = round(yaw, 3)
+    if abs(yaw) < FRONTAL_MAX_YAW:
+        return "frontal", yaw
+    if abs(yaw) >= TURNED_MIN_YAW:
+        return ("nariz_derecha" if yaw > 0 else "nariz_izquierda"), yaw
+    return "indeterminado", yaw
 
 
 class LocalScreener:
@@ -160,11 +194,40 @@ class LocalScreener:
         if brightness < DARK_MEAN or brightness > BRIGHT_MEAN:
             issues.append("iluminacion")
 
+        pose, yaw = estimate_pose(best)
         return ScreeningResult(
             acceptable=True,
             subject="rostro_humano",
             issues=tuple(dict.fromkeys(issues)),
             reason="",
+            pose=pose,
+            yaw_ratio=yaw,
+        )
+
+    def best_face(self, image: Any) -> Face | None:
+        """The most confident plausible face of a BGR image, in THAT image's coordinates.
+
+        Same detection and plausibility rules as ``screen``; ``None`` when nothing reaches
+        ``MIN_FACE_SCORE``. Used by the acne gate to crop the face before judging the skin.
+        """
+        faces, analysed = self._detect(image)
+        plausible = [
+            f
+            for f in _merge_overlapping(faces)
+            if f.width >= MIN_DETECTION_FRACTION * analysed.shape[1]
+            and f.height >= MIN_DETECTION_FRACTION * analysed.shape[0]
+        ]
+        best = max(plausible, key=lambda f: f.score, default=None)
+        if best is None or best.score < MIN_FACE_SCORE:
+            return None
+        scale = image.shape[1] / analysed.shape[1]
+        return Face(
+            x=int(best.x * scale),
+            y=int(best.y * scale),
+            width=int(best.width * scale),
+            height=int(best.height * scale),
+            score=best.score,
+            landmarks=tuple((x * scale, y * scale) for x, y in best.landmarks),
         )
 
     # --- pieces, separated so tests can exercise the rules without a real face ----------------
@@ -202,6 +265,7 @@ class LocalScreener:
             factor = scale_largest / scale
             for row in detections:
                 x, y, w, h = (float(v) for v in row[:4])
+                points = [float(v) * factor for v in row[4:14]]
                 faces.append(
                     Face(
                         x=max(0, int(x * factor)),
@@ -209,6 +273,7 @@ class LocalScreener:
                         width=max(1, int(w * factor)),
                         height=max(1, int(h * factor)),
                         score=float(row[-1]),
+                        landmarks=tuple(zip(points[0::2], points[1::2], strict=True)),
                     )
                 )
         return faces, analysed

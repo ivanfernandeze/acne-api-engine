@@ -98,8 +98,43 @@ class MemberPredictionOut(BaseModel):
 
 
 class InferSingleResponse(BaseModel):
-    prediction: Prediction
-    gags_secondary: GagsSecondary
+    verdict: Literal["acne", "piel_sana", "no_acne"] = Field(
+        default="acne",
+        description=(
+            "`acne`: se graduó con el ensemble IGA. `piel_sana`: el filtro previo vio piel sana "
+            "(las pecas incluidas) y la sugerencia es `sin_lesiones` con la probabilidad DEL "
+            "FILTRO; el ensemble no corrió (sin miembros ni Grad-CAM). `no_acne`: otra condición "
+            "(vitíligo, psoriasis…); no se graduó y `prediction`, `gags_secondary` vienen nulos."
+        ),
+    )
+    gate_probabilities: dict[str, float] | None = Field(
+        default=None,
+        description="Probabilidad de cada etiqueta del filtro (acne, sana, otra); null sin filtro.",
+    )
+    gate_checked: bool = Field(
+        default=False,
+        description=(
+            "Falso cuando no hay filtro de acné cargado: `verdict` es `acne` por defecto y no "
+            "significa que se haya verificado nada."
+        ),
+    )
+    acne_probability: float | None = Field(
+        default=None, ge=0.0, le=1.0, description="Probabilidad de acné según el filtro."
+    )
+    gate_threshold: float | None = Field(
+        default=None, ge=0.0, le=1.0, description="Umbral con el que se decidió `verdict`."
+    )
+    gate_version: str | None = Field(default=None, description="Versión del filtro de acné.")
+    prediction: Prediction | None = Field(
+        default=None,
+        description=(
+            "Nulo solo cuando `verdict` es `no_acne`. Con `piel_sana` es `sin_lesiones` y "
+            "`class_probs` lleva únicamente la probabilidad de piel sana según el filtro."
+        ),
+    )
+    gags_secondary: GagsSecondary | None = Field(
+        default=None, description="Nulo solo cuando `verdict` es `no_acne`."
+    )
     assessment: ClinicalAssessment | None = Field(
         default=None,
         description="Lectura clínica razonada. Ausente cuando el backend solo mira píxeles.",
@@ -159,6 +194,20 @@ class ImageScreenResponse(BaseModel):
         description="Problemas de calidad. Advierten; por sí solos no bloquean la subida.",
     )
     reason: str = Field(default="", description="Una frase para quien tomó la fotografía.")
+    pose: Literal["frontal", "nariz_derecha", "nariz_izquierda", "indeterminado"] = Field(
+        default="indeterminado",
+        description=(
+            "Orientación de la cabeza (solo geometría). `nariz_*` es el lado de la IMAGEN hacia el "
+            "que apunta la nariz, no el lado del paciente: una selfie espejada lo invierte."
+        ),
+    )
+    yaw_ratio: float | None = Field(
+        default=None,
+        description=(
+            "Desplazamiento de la nariz respecto al punto medio de los ojos, en fracción del ancho "
+            "del rostro (positivo = hacia la derecha de la imagen). Null si no se midió."
+        ),
+    )
     latency_ms: int
     model_backend: Literal["stub", "torch", "gemini"]
 
@@ -225,6 +274,10 @@ class IiaCheckResponse(BaseModel):
         default_factory=list,
         description="Modelos que componen el ensemble servido, con versión y checksum de cada uno.",
     )
+    acne_gate_version: str | None = Field(
+        default=None, description="Filtro acné / no acné previo a la graduación; null si no hay."
+    )
+    acne_gate_checksum: str | None = None
 
 
 class EnsembleMemberInfo(BaseModel):

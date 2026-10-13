@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter
 
 from app.config import get_settings
-from app.models.registry import get_classifier
+from app.models.registry import get_acne_gate, get_classifier
 from app.schemas import EnsembleMemberInfo, IiaCheckResponse
 from app.services.telemetry import telemetry
 
@@ -61,6 +61,16 @@ def iia_check() -> IiaCheckResponse:
     if classifier.weights_checksum is None and classifier.operational:
         warnings.append("El modelo está activo pero no expone checksum de pesos (RNF-03).")
 
+    # Not an IIA blocker — the CNN is the independent variable, not the gate — but without it
+    # the system grades anything it is shown, freckles and vitiligo included, and that has to
+    # be visible.
+    gate = get_acne_gate()
+    if gate is None:
+        warnings.append(
+            "Sin filtro de acné: toda imagen se gradúa como acné, aunque muestre otra condición o "
+            "piel sana. Entrénelo con training/gate/train_gate.py (ACNE_GATE_CHECKPOINT)."
+        )
+
     p95 = snapshot["p95_ms"]
     if isinstance(p95, float) and p95 > 8000:
         warnings.append(
@@ -96,4 +106,6 @@ def iia_check() -> IiaCheckResponse:
         checked_at=datetime.now(UTC).isoformat(),
         warnings=warnings,
         ensemble_members=ensemble_members,
+        acne_gate_version=None if gate is None else gate.version,
+        acne_gate_checksum=None if gate is None else gate.weights_checksum,
     )

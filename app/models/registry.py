@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
+from pathlib import Path
 
 from app.config import get_settings
-from app.models.base import Classifier, ImageScreener
+from app.models.base import AcneGate, Classifier, ImageScreener
 from app.models.stub import StubClassifier
 
 logger = logging.getLogger(__name__)
@@ -122,7 +123,40 @@ def get_screener() -> ImageScreener | None:
         return None
 
 
+@lru_cache(maxsize=1)
+def get_acne_gate() -> AcneGate | None:
+    """The acne / not-acne filter that runs before grading, or ``None`` when there is none.
+
+    ``None`` means every image is graded, exactly as before the gate existed; ``/infer/single``
+    reports it as ``gate_checked: false`` so an unfiltered grade is never mistaken for a filtered
+    one.
+    """
+    settings = get_settings()
+    if not settings.acne_gate_enabled:
+        logger.warning("Filtro de acné desactivado (ACNE_GATE_ENABLED=false).")
+        return None
+    if not Path(settings.acne_gate_checkpoint).is_file():
+        logger.warning(
+            "No hay checkpoint del filtro de acné en %s: toda imagen se gradúa sin filtrar. "
+            "Entrénelo con training/gate/train_gate.py.",
+            settings.acne_gate_checkpoint,
+        )
+        return None
+    try:
+        from app.models.acne_gate import TorchAcneGate
+
+        gate = TorchAcneGate(settings.acne_gate_checkpoint, settings.acne_gate_threshold)
+        logger.info("Filtro de acné activo: %s (umbral %.3f)", gate.version, gate.threshold)
+        return gate
+    except Exception as error:
+        logger.error(
+            "No se pudo cargar el filtro de acné (%s). Toda imagen se gradúa sin filtrar.", error
+        )
+        return None
+
+
 def reset_classifier_cache() -> None:
-    """Clear the cached classifier and screener; used by the tests."""
+    """Clear the cached classifier, screener and gate; used by the tests."""
     get_classifier.cache_clear()
     get_screener.cache_clear()
+    get_acne_gate.cache_clear()

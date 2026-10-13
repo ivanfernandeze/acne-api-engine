@@ -16,3 +16,10 @@ mlruns
 .git
 .github
 tests
+
+# Datasets de terceros: nunca entran al contexto de build (CFD prohíbe redistribuirse).
+archive
+cfd
+cfd.zip
+fitzapick17k
+fitzapick17k.zip

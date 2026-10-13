@@ -23,6 +23,12 @@ archive/
 data/
 runs/
 mlruns/
+# Chicago Face Database: sus términos prohíben redistribuirla (también a repositorios o servicios en
+# la nube) y publicar sus fotos. Fitzpatrick17k: CSV de terceros. Ambos solo para el filtro de acné.
+cfd/
+cfd.zip
+fitzapick17k/
+fitzapick17k.zip
 
 # Pesos: por defecto fuera de Git (p. ej. yolov8s-cls.pt o weights/, que Ultralytics descarga solo)...
 *.pt

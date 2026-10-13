@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import time
 
 from fastapi import APIRouter, HTTPException, status
 
 from app.config import get_settings
 from app.domain.iga import IGA_TO_GAGS_CENTRE, gags_grade_from_score
-from app.models.base import AnamnesisItem, ClinicalContext
-from app.models.registry import get_classifier
+from app.models.base import AnamnesisItem, ClinicalContext, GateResult
+from app.models.registry import get_acne_gate, get_classifier
 from app.schemas import (
     ClinicalAssessment,
     GagsSecondary,
@@ -21,6 +22,8 @@ from app.schemas import (
     Prediction,
 )
 from app.services.telemetry import telemetry
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/infer", tags=["inference"])
 
@@ -63,6 +66,60 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
     classifier = get_classifier()
     started = time.perf_counter()
 
+    # The gate first: an image that is not acne is not graded at all. Grading it anyway and hiding
+    # the grade would still put a severity for vitiligo or freckles into the record.
+    gate = get_acne_gate()
+    gate_result: GateResult | None = None
+    if gate is not None:
+        try:
+            gate_result = gate.check(image_bytes, request.mime_type)
+        except Exception as error:  # the gate must never cost a diagnosis
+            # Failing open, like the screener: a clinician reviews every case anyway.
+            logger.error("El filtro de acné falló (%s). La imagen se gradúa sin filtrar.", error)
+
+    gate_fields = {
+        "gate_checked": gate_result is not None,
+        "acne_probability": None if gate_result is None else gate_result.acne_probability,
+        "gate_threshold": None if gate_result is None else gate_result.threshold,
+        "gate_version": None if gate is None or gate_result is None else gate.version,
+        "gate_probabilities": None if gate_result is None else dict(gate_result.probabilities),
+    }
+
+    if gate_result is not None and not gate_result.is_acne:
+        latency_ms = (time.perf_counter() - started) * 1000
+        telemetry.record(latency_ms)
+        healthy = gate_result.label == "sana"
+        # Healthy skin IS a reading: `sin_lesiones`, the class ACNE04 never let the IGA models
+        # learn. Its confidence is the gate's, and the vector says so by carrying only that class.
+        # Another condition has no IGA reading at all.
+        healthy_probability = gate_result.probabilities.get("sana", 0.0)
+        return InferSingleResponse(
+            verdict="piel_sana" if healthy else "no_acne",
+            **gate_fields,
+            prediction=(
+                Prediction(
+                    iga_class="sin_lesiones",
+                    confidence=healthy_probability,
+                    class_probs={"sin_lesiones": healthy_probability},
+                )
+                if healthy
+                else None
+            ),
+            gags_secondary=(
+                GagsSecondary(
+                    grade=gags_grade_from_score(IGA_TO_GAGS_CENTRE["sin_lesiones"]),
+                    score=IGA_TO_GAGS_CENTRE["sin_lesiones"],
+                )
+                if healthy
+                else None
+            ),
+            latency_ms=round(latency_ms),
+            model_version=classifier.version,
+            model_backend=classifier.backend,  # type: ignore[arg-type]
+            weights_checksum=classifier.weights_checksum,
+            seed=settings.model_seed,
+        )
+
     context = (
         None
         if request.clinical_context is None
@@ -100,6 +157,8 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
     )
 
     return InferSingleResponse(
+        verdict="acne",
+        **gate_fields,
         prediction=Prediction(
             iga_class=result.iga_class,
             confidence=result.confidence,

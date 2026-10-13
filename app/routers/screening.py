@@ -108,6 +108,8 @@ def screen_image(request: ImageScreenRequest) -> ImageScreenResponse:
         subject=result.subject,
         issues=list(result.issues),
         reason=result.reason,
+        pose=result.pose,
+        yaw_ratio=result.yaw_ratio,
         latency_ms=round((time.perf_counter() - started) * 1000),
         model_backend=classifier.backend,  # type: ignore[arg-type]
     )

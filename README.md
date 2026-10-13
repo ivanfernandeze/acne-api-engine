@@ -132,6 +132,7 @@ ilustración coloreada con tono de piel realista puede pasar; para eso está `SC
 Los problemas de calidad (rostro pequeño o más de uno en cuadro, desenfoque, luz insuficiente) son
 avisos que no bloquean. `SCREENING_BACKEND=none` desactiva el cribado y el endpoint responde
 `checked: false` en lugar de inventarse un veredicto.
+
 - **La respuesta se valida sin piedad y no se corrige.** Clase fuera de la escala, confianza fuera
   de [0, 1], probabilidades que no suman ~1 o GAGS fuera de [0, 44] hacen fallar la inferencia. Un
   valor recortado en silencio sería un juicio clínico inventado, y además reventaría los `CHECK` de
@@ -140,6 +141,81 @@ avisos que no bloquean. `SCREENING_BACKEND=none` desactiva el cribado y el endpo
 Las pruebas de este backend (`tests/test_gemini_backend.py`) **no llaman a la API**, y
 `tests/conftest.py` fija `MODEL_BACKEND=stub` para toda la suite: sin eso, un `.env` con la clave
 haría que cada prueba de contrato gastara cuota y dependiera de la red.
+
+**Pose de la cabeza (desde el 01/10/2026).** El cribado devuelve además `pose` (`frontal`,
+`nariz_derecha`, `nariz_izquierda`, `indeterminado`) y `yaw_ratio`, calculados con los cinco puntos
+faciales de YuNet: el desplazamiento de la nariz respecto al punto medio de los ojos, en fracción del
+ancho del rostro. `acne-api` lo usa para rechazar una «Vista general» girada, un perfil de frente,
+la misma foto en dos tomas y dos perfiles girados al mismo lado. Es geometría, no un dato clínico,
+así que la regla de RF-TR-01 se mantiene. Umbrales calibrados sobre 400 fotos de ACNE04 con
+`python -m training.calibrate_pose`: frontal si |yaw| < 0,04, girado si |yaw| ≥ 0,06; con score de
+detección menor que 0,6 (acercamientos de mejilla) la pose queda `indeterminado`.
+
+#### Filtro acné / piel sana / otra condición — antes de graduar (`/infer/single`)
+
+Los tres clasificadores IGA se entrenaron solo con ACNE04, que no contiene nada que no sea acné, así
+que **gradúan cualquier cosa**: pecas, vitíligo, otra dermatosis o piel sana salían con un grado de
+acné (`sin_lesiones` nunca se entrenó, porque ACNE04 no tiene esa clase). La auditoría con 830 caras
+sanas de la Chicago Face Database lo mide: el **69,5 %** salió graduado `leve` o peor y el 30 %
+`severo` (ver más abajo).
+
+Un filtro de tres clases (`app/models/acne_gate.py`, timm `efficientnet_b0`) corre antes del
+ensemble:
+
+| Filtro | `verdict` | Qué responde el motor |
+|---|---|---|
+| acné | `acne` | Lo de siempre: el ensemble IGA gradúa. |
+| piel sana (pecas incluidas) | `piel_sana` | `sin_lesiones` con la probabilidad **del filtro**; el ensemble no corre. |
+| otra condición | `no_acne` | Sin clase, GAGS ni Grad-CAM; el portal avisa de la incongruencia. |
+
+Decide en dos pasos: si `p(acné) ≥ umbral` (fijado en validación para sensibilidad ≥ 0,97), es acné;
+si no, la más probable entre sana y otra. Antes recorta el rostro con el mismo YuNet del cribado,
+para que el fondo de cada fuente no se convierta en la señal. Vive en la inferencia y no en el
+cribado porque es un juicio clínico: la inferencia no se invoca en pretest (RF-TR-01).
+
+**Datos** (`training/gate/build_dataset.py`): acné de ACNE04 y de Fitzpatrick17k (`acne`, `acne
+vulgaris`); piel sana de la **Chicago Face Database** (826 personas, 1 440 fotos, con etnia, edad y
+luminancia del rostro); otras condiciones de **Fitzpatrick17k** (hasta 60 por condición). Partición
+70/15/15 **por persona**. Desde 10/2026 `dermaamin.com` responde 404 y de Fitzpatrick17k solo queda
+`atlasdermatologico.com.br` (24 imágenes de acné); una copia con imágenes (p. ej. Kaggle) se integra
+con `--fitzpatrick-images <carpeta>` (archivos `<md5hash>.jpg` en cualquier subcarpeta).
+
+```bash
+uv run python -m training.gate.build_dataset --fitzpatrick-csv fitzapick17k/fitzpatrick17k.csv     --download --cfd-dir cfd
+uv run python -m training.gate.train_gate        # → checkpoints/acne_gate.candidate.pt
+uv run python -m training.gate.evaluate_gate     # test: por fuente, fototipo, etnia y luminancia
+```
+
+**El checkpoint sale como candidato** (`acne_gate.candidate.pt`) y el motor no lo carga: solo sirve
+`checkpoints/acne_gate.pt`. **Desde el 13/10/2026 está activo**: el candidato
+`gate3_efficientnet_b0_20261010T205825Z` se copió a `acne_gate.pt` con `ACNE_GATE_THRESHOLD=0.5`
+(en `.env` y en `docker-compose.yml`), antes de validarlo con fotos de la clínica (riesgo descrito
+en `05_evaluation.md` §9). Para desactivarlo: `ACNE_GATE_ENABLED=false`. Sin filtro, el motor gradúa todo como antes, responde `gate_checked: false` y
+`/audit/iia-check` lo advierte.
+
+**Registro de cada entrenamiento.** `train_gate` y `evaluate_gate` dejan todo en
+`runs/gate/<run_id>/` (configuración y entorno, datos, historial por época, curva del umbral,
+métricas de validación y test, copia del manifiesto) y un reporte versionado en
+`acne-infra/docs/entrenamientos/filtro-acne-<run_id>.md` con las consideraciones y decisiones.
+
+**Riesgo de atajo:** cada fuente tiene su cámara (ACNE04 una clínica, CFD un estudio, Fitzpatrick17k
+dos atlas) y un filtro puede aprender la fuente y no la piel. Mitigaciones: recorte de rostro,
+recortes de media cara en el entrenamiento (CFD solo tiene fotos de frente), métricas por fuente y
+validación con fotos de la clínica antes de activarlo.
+
+**Licencias.** CFD: solo investigación no comercial; sus fotos **no se publican ni se redistribuyen**
+(`cfd/` está en `.gitignore` y `.dockerignore`); citar Ma, Correll y Wittenbrink (2015), Ma, Kantner y
+Wittenbrink (2020) y Lakshmi et al. (2021). Fitzpatrick17k: Groh et al. (2021).
+
+#### Auditoría de equidad de los modelos IGA (`training/audit_fairness_cfd.py`)
+
+ACNE04 no trae fototipo, así que la equidad por tono de piel no se podía auditar. CFD sí trae etnia y
+luminancia medida del rostro: el script pasa sus 830 fotos neutrales (todas caras sanas) por el
+ensemble servido y compara el grado asignado entre grupos (Kruskal-Wallis, Spearman). Resultado del
+10/10/2026: diferencias significativas por etnia (p = 0,005; grado medio 1,92 en caras blancas frente
+a 2,45 en caras de India) y tendencia límite por luminancia (p = 0,069). Es exploratoria (fotos de
+estudio, población estadounidense) y mide solo falsos positivos en piel sana. Reporte en
+`acne-infra/docs/entrenamientos/auditoria-equidad-cfd-<run_id>.md`.
 
 ---
 
