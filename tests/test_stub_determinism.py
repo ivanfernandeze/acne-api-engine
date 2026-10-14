@@ -33,8 +33,7 @@ def test_prediction_is_stable_across_instances(sample_image: bytes) -> None:
 def test_different_seed_can_change_prediction(sample_image: bytes) -> None:
     """The seed genuinely participates, so it is worth recording alongside each inference."""
     predictions = {
-        StubClassifier(seed=seed).predict(sample_image, "image/png").iga_class
-        for seed in range(40)
+        StubClassifier(seed=seed).predict(sample_image, "image/png").iga_class for seed in range(40)
     }
     assert len(predictions) > 1
 

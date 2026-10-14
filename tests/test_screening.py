@@ -52,19 +52,13 @@ def test_accepts_a_clean_healthy_face(classifier: GeminiClassifier) -> None:
     # THE test that matters. `sin_lesiones` is a valid IGA class and a resolved case at a follow-up
     # visit looks exactly like this. Rejecting it would throw away the evidence that the treatment
     # worked — and 6 of the 30 study cases are graded `sin_lesiones`.
-    result = classifier._validate_screening(
-        payload(reason="", issues=[])
-    )
+    result = classifier._validate_screening(payload(reason="", issues=[]))
 
     assert result.acceptable is True
 
 
-@pytest.mark.parametrize(
-    "subject", ["persona_sin_rostro", "piel_no_facial", "otro"]
-)
-def test_rejects_anything_that_is_not_a_face(
-    classifier: GeminiClassifier, subject: str
-) -> None:
+@pytest.mark.parametrize("subject", ["persona_sin_rostro", "piel_no_facial", "otro"])
+def test_rejects_anything_that_is_not_a_face(classifier: GeminiClassifier, subject: str) -> None:
     result = classifier._validate_screening(payload(subject=subject))
 
     assert result.acceptable is False

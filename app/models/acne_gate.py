@@ -173,7 +173,7 @@ class TorchAcneGate:
         )
         with torch.no_grad():
             output = torch.softmax(self._model(tensor), dim=1)[0]
-        probabilities = {
+        probabilities: dict[str, float] = {
             label: round(float(output[index].item()), 4) for index, label in enumerate(GATE_CLASSES)
         }
         return GateResult(

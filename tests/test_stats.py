@@ -18,8 +18,9 @@ def test_normal_differences_select_the_paired_t_test() -> None:
     postest = [6.1, 5.4, 6.6, 5.8, 6.2, 5.6, 6.4, 5.9, 6.3, 5.5]
 
     result = run_paired_test(
-        PairedTestRequest(design="paired", alpha=0.05, alternative="less",
-                          pretest=pretest, postest=postest)
+        PairedTestRequest(
+            design="paired", alpha=0.05, alternative="less", pretest=pretest, postest=postest
+        )
     )
 
     assert result.normality.applicable is True
@@ -36,8 +37,9 @@ def test_non_normal_differences_select_wilcoxon() -> None:
     postest = [9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.8, 1.0]
 
     result = run_paired_test(
-        PairedTestRequest(design="paired", alpha=0.05, alternative="less",
-                          pretest=pretest, postest=postest)
+        PairedTestRequest(
+            design="paired", alpha=0.05, alternative="less", pretest=pretest, postest=postest
+        )
     )
 
     assert result.normality.normal is False
@@ -89,12 +91,14 @@ def test_direction_matters() -> None:
     postest = [8.0, 8.4, 7.7, 8.3, 8.1, 7.9, 8.2, 8.5]
 
     wrong_way = run_paired_test(
-        PairedTestRequest(design="paired", alpha=0.05, alternative="less",
-                          pretest=pretest, postest=postest)
+        PairedTestRequest(
+            design="paired", alpha=0.05, alternative="less", pretest=pretest, postest=postest
+        )
     )
     right_way = run_paired_test(
-        PairedTestRequest(design="paired", alpha=0.05, alternative="greater",
-                          pretest=pretest, postest=postest)
+        PairedTestRequest(
+            design="paired", alpha=0.05, alternative="greater", pretest=pretest, postest=postest
+        )
     )
 
     assert wrong_way.p_value > 0.05
@@ -105,8 +109,13 @@ def test_identical_samples_are_rejected_with_a_clear_message() -> None:
     """Nothing changed between O₁ and O₂, so there is nothing to contrast."""
     with pytest.raises(InsufficientDataError, match="cero"):
         run_paired_test(
-            PairedTestRequest(design="paired", alpha=0.05, alternative="two-sided",
-                              pretest=[1.0, 2.0, 3.0], postest=[1.0, 2.0, 3.0])
+            PairedTestRequest(
+                design="paired",
+                alpha=0.05,
+                alternative="two-sided",
+                pretest=[1.0, 2.0, 3.0],
+                postest=[1.0, 2.0, 3.0],
+            )
         )
 
 
@@ -134,16 +143,26 @@ def test_constant_non_zero_difference_falls_back_to_wilcoxon() -> None:
 def test_too_few_pairs_are_rejected() -> None:
     with pytest.raises(InsufficientDataError, match="al menos 3"):
         run_paired_test(
-            PairedTestRequest(design="paired", alpha=0.05, alternative="less",
-                              pretest=[1.0, 2.0], postest=[0.5, 1.0])
+            PairedTestRequest(
+                design="paired",
+                alpha=0.05,
+                alternative="less",
+                pretest=[1.0, 2.0],
+                postest=[0.5, 1.0],
+            )
         )
 
 
 def test_mismatched_sample_sizes_are_rejected() -> None:
     with pytest.raises(InsufficientDataError, match="mismo tamaño"):
         run_paired_test(
-            PairedTestRequest(design="paired", alpha=0.05, alternative="less",
-                              pretest=[1.0, 2.0, 3.0], postest=[0.5, 1.0])
+            PairedTestRequest(
+                design="paired",
+                alpha=0.05,
+                alternative="less",
+                pretest=[1.0, 2.0, 3.0],
+                postest=[0.5, 1.0],
+            )
         )
 
 

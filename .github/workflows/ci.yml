@@ -17,6 +17,9 @@ jobs:
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          # There is no uv.lock in the repo (dependencies are ranges in pyproject.toml); the
+          # default glob **/uv.lock finds nothing and fails the step.
+          cache-dependency-glob: pyproject.toml
 
       - name: Fijar Python 3.11
         run: uv python install 3.11

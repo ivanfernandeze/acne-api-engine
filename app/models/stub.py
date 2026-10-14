@@ -101,7 +101,7 @@ class StubClassifier:
         try:
             with Image.open(io.BytesIO(image_bytes)) as source:
                 base = source.convert("RGB")
-        except Exception:  # noqa: BLE001 - an unreadable image must not fail the inference
+        except Exception:
             return None
 
         width, height = base.size

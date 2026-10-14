@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw
 
 pytest.importorskip("torch")
 
-from training.detection.common import (  # noqa: E402
+from training.detection.common import (
     DetectionSample,
     Prediction,
     evaluate_predictions,

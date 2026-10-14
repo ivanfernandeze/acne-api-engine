@@ -11,6 +11,8 @@ six months later (RNF-05).
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 from scipy import stats
 
@@ -32,6 +34,9 @@ MIN_SHAPIRO_N = 3
 
 class InsufficientDataError(ValueError):
     """Raised when the sample cannot support any test."""
+
+
+Magnitude = Literal["trivial", "small", "medium", "large"]
 
 
 def run_paired_test(request: PairedTestRequest) -> PairedTestResponse:
@@ -249,7 +254,7 @@ def _rank_biserial(differences: np.ndarray) -> EffectSize | None:
     )
 
 
-def _dz_magnitude(value: float) -> str:
+def _dz_magnitude(value: float) -> Magnitude:
     if value < 0.2:
         return "trivial"
     if value < 0.5:
@@ -259,7 +264,7 @@ def _dz_magnitude(value: float) -> str:
     return "large"
 
 
-def _r_magnitude(value: float) -> str:
+def _r_magnitude(value: float) -> Magnitude:
     if value < 0.1:
         return "trivial"
     if value < 0.3:

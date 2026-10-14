@@ -56,6 +56,8 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
 ignore = ["B008"]  # FastAPI's Depends() in defaults is idiomatic.
+# Typography of Spanish prose and of statistics, not look-alike identifiers.
+allowed-confusables = ["–", "−", "α", "×"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -67,9 +69,15 @@ plugins = []
 [[tool.mypy.overrides]]
 module = [
     "scipy.*", "PIL.*", "timm.*", "captum.*", "torch.*", "torchvision.*", "sklearn.*", "mlflow.*",
-    "ultralytics.*", "torchmetrics.*",
+    "ultralytics.*", "torchmetrics.*", "cv2", "cv2.*",
 ]
 ignore_missing_imports = true
+
+[tool.coverage.run]
+# Backends that only run with the [torch] extra. CI installs `--extra dev` only, so their tests
+# skip there (pytest.importorskip) and they would count as 0 % against the 70 % gate; they are
+# tested locally, with the extra, by tests/test_torch_backend.py and tests/test_ensemble_backend.py.
+omit = ["app/models/torch_backend.py", "app/models/ensemble_backend.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -157,7 +157,9 @@ class TorchClassifier:
                 full[position] = float(probabilities[column].item())
         index = max(range(len(full)), key=full.__getitem__)
         predicted: IgaClass = IGA_CLASSES[index]
-        class_probs = {iga_class: round(full[i], 4) for i, iga_class in enumerate(IGA_CLASSES)}
+        class_probs: dict[str, float] = {
+            iga_class: round(full[i], 4) for i, iga_class in enumerate(IGA_CLASSES)
+        }
 
         target_column = self._class_positions.index(index)
         heatmap = (
@@ -229,7 +231,7 @@ class TorchClassifier:
                     min(image.height, y2 + margin_y),
                 )
             )
-        except Exception:  # noqa: BLE001 - detection is best-effort
+        except Exception:
             return self._centre_square(image)
 
     @staticmethod
@@ -271,7 +273,7 @@ class TorchClassifier:
             buffer = io.BytesIO()
             blended.save(buffer, format="PNG", optimize=True)
             return buffer.getvalue()
-        except Exception:  # noqa: BLE001 - interpretability must never break a diagnosis
+        except Exception:
             return None
 
 

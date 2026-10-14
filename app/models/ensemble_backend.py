@@ -165,7 +165,9 @@ class EnsembleClassifier:
         combined = [value / total_weight for value in combined]
         index = max(range(len(combined)), key=combined.__getitem__)
         recommended: IgaClass = IGA_CLASSES[index]
-        class_probs = {c: round(combined[i], 4) for i, c in enumerate(IGA_CLASSES)}
+        class_probs: dict[str, float] = {
+            c: round(combined[i], 4) for i, c in enumerate(IGA_CLASSES)
+        }
 
         # The lead Grad-CAM is the heaviest member's; every member's map travels in `members`.
         lead = max(readings, key=lambda r: r.weight)

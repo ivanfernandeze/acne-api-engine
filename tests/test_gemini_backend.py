@@ -93,9 +93,7 @@ def test_renormalises_probabilities_that_are_merely_off_by_rounding(
 def test_rejects_probabilities_that_are_wildly_off(classifier: GeminiClassifier) -> None:
     # Renormalising a rounding error is arithmetic; renormalising this would be inventing a
     # distribution the model never expressed.
-    probs = dict.fromkeys(
-        ["sin_lesiones", "casi_sin_lesiones", "leve", "moderado", "severo"], 1.0
-    )
+    probs = dict.fromkeys(["sin_lesiones", "casi_sin_lesiones", "leve", "moderado", "severo"], 1.0)
     with pytest.raises(GeminiResponseError, match="demasiado lejos de 1"):
         classifier._validate(valid_payload(class_probs=probs))
 
@@ -242,4 +240,3 @@ def test_prompt_quotes_the_history_verbatim() -> None:
 
 def test_an_empty_context_is_treated_as_no_context() -> None:
     assert "No se dispone de anamnesis" in _user_prompt(ClinicalContext())
-

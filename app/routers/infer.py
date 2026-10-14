@@ -6,6 +6,7 @@ import base64
 import binascii
 import logging
 import time
+from typing import TypedDict
 
 from fastapi import APIRouter, HTTPException, status
 
@@ -24,6 +25,17 @@ from app.schemas import (
 from app.services.telemetry import telemetry
 
 logger = logging.getLogger(__name__)
+
+
+class GateFields(TypedDict):
+    """What the acne gate adds to every inference response (see ``InferSingleResponse``)."""
+
+    gate_checked: bool
+    acne_probability: float | None
+    gate_threshold: float | None
+    gate_version: str | None
+    gate_probabilities: dict[str, float] | None
+
 
 router = APIRouter(prefix="/infer", tags=["inference"])
 
@@ -77,13 +89,13 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
             # Failing open, like the screener: a clinician reviews every case anyway.
             logger.error("El filtro de acné falló (%s). La imagen se gradúa sin filtrar.", error)
 
-    gate_fields = {
-        "gate_checked": gate_result is not None,
-        "acne_probability": None if gate_result is None else gate_result.acne_probability,
-        "gate_threshold": None if gate_result is None else gate_result.threshold,
-        "gate_version": None if gate is None or gate_result is None else gate.version,
-        "gate_probabilities": None if gate_result is None else dict(gate_result.probabilities),
-    }
+    gate_fields = GateFields(
+        gate_checked=gate_result is not None,
+        acne_probability=None if gate_result is None else gate_result.acne_probability,
+        gate_threshold=None if gate_result is None else gate_result.threshold,
+        gate_version=None if gate is None or gate_result is None else gate.version,
+        gate_probabilities=None if gate_result is None else dict(gate_result.probabilities),
+    )
 
     if gate_result is not None and not gate_result.is_acne:
         latency_ms = (time.perf_counter() - started) * 1000
@@ -136,7 +148,7 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
 
     try:
         result = classifier.predict(image_bytes, request.mime_type, context)
-    except Exception as error:  # noqa: BLE001 - report the failure rate honestly
+    except Exception as error:
         telemetry.record((time.perf_counter() - started) * 1000, failed=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -186,7 +198,7 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
             if result.heatmap_png is not None
             else None
         ),
-        latency_ms=int(round(latency_ms)),
+        latency_ms=round(latency_ms),
         model_version=classifier.version,
         model_backend=classifier.backend,  # type: ignore[arg-type]
         weights_checksum=classifier.weights_checksum,

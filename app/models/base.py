@@ -219,13 +219,19 @@ class Classifier(Protocol):
     #: Reported in every inference and in the IIA checklist.
     version: str
     backend: str
-    #: SHA-256 of the weights file; ``None`` when there are no weights.
-    weights_checksum: str | None
     #: True only when a genuinely trained model is serving, which is what gates IIA = 1.
     operational: bool
     #: Why the check passes or fails: ``stub``, ``cnn`` or ``llm_externo``. Two backends can both
     #: report ``operational = False`` for reasons that are not remotely equivalent.
     kind: str
+
+    @property
+    def weights_checksum(self) -> str | None:
+        """SHA-256 of the weights file; ``None`` when there are no weights.
+
+        Read-only in the contract, so a backend that always has weights may declare it ``str``.
+        """
+        ...
 
     def predict(
         self,
