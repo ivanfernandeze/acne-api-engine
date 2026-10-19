@@ -126,7 +126,12 @@ def render(run_dir: Path) -> str:
     dataset = read_json(run_dir / "dataset.json") or {}
     val = read_json(run_dir / "metrics-val.json") or {}
     test = read_json(run_dir / "metrics-test.json")
-    history = (run_dir / "history.csv").read_text(encoding="utf-8").strip().splitlines()
+    history_path = run_dir / "history.csv"
+    history = (
+        history_path.read_text(encoding="utf-8").strip().splitlines()
+        if history_path.is_file()
+        else []
+    )
 
     args = config.get("arguments", {})
     env = config.get("environment", {})

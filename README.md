@@ -187,10 +187,12 @@ uv run python -m training.gate.evaluate_gate     # test: por fuente, fototipo, e
 ```
 
 **El checkpoint sale como candidato** (`acne_gate.candidate.pt`) y el motor no lo carga: solo sirve
-`checkpoints/acne_gate.pt`. **Desde el 13/10/2026 está activo**: el candidato
-`gate3_efficientnet_b0_20261010T205825Z` se copió a `acne_gate.pt` con `ACNE_GATE_THRESHOLD=0.5`
-(en `.env` y en `docker-compose.yml`), antes de validarlo con fotos de la clínica (riesgo descrito
-en `05_evaluation.md` §9). Para desactivarlo: `ACNE_GATE_ENABLED=false`. Sin filtro, el motor gradúa todo como antes, responde `gate_checked: false` y
+`checkpoints/acne_gate.pt`. **Activo desde el 19/10/2026: el modelo 2**
+(`gate3_efficientnet_b0_20261019T154808Z`, entrenado con Fitzpatrick17k completo) con
+`ACNE_GATE_THRESHOLD=0.009` (en `.env` y en `docker-compose.yml`). Reconoce el 90 % del acné de otras
+cámaras frente al 41 % del modelo 1 (13/10/2026), que había aprendido la cámara de ACNE04; la
+comparación está en `05_evaluation.md` §9. Sigue pendiente validarlo con fotos de la clínica
+(`training/gate/validate_clinic.py`). Para desactivarlo: `ACNE_GATE_ENABLED=false`. Sin filtro, el motor gradúa todo como antes, responde `gate_checked: false` y
 `/audit/iia-check` lo advierte.
 
 **Registro de cada entrenamiento.** `train_gate` y `evaluate_gate` dejan todo en

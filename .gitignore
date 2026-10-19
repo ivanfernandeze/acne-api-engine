@@ -29,6 +29,9 @@ cfd/
 cfd.zip
 fitzapick17k/
 fitzapick17k.zip
+# Fitzpatrick17k completo (imágenes de los autores, CC BY-NC-SA 3.0): no se redistribuye.
+fitzpatrick17k/
+fitzpatrick17k.zip
 
 # Pesos: por defecto fuera de Git (p. ej. yolov8s-cls.pt o weights/, que Ultralytics descarga solo)...
 *.pt
