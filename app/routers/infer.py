@@ -6,14 +6,21 @@ import base64
 import binascii
 import logging
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TypedDict
 
 from fastapi import APIRouter, HTTPException, status
 
 from app.config import get_settings
 from app.domain.iga import IGA_TO_GAGS_CENTRE, gags_grade_from_score
-from app.models.base import AnamnesisItem, ClinicalContext, GateResult
-from app.models.registry import get_acne_gate, get_classifier
+from app.models.base import (
+    AnamnesisItem,
+    ClinicalContext,
+    GateResult,
+    SecondOpinion,
+    SkinConditionChecker,
+)
+from app.models.registry import get_acne_gate, get_classifier, get_second_opinion
 from app.schemas import (
     ClinicalAssessment,
     GagsSecondary,
@@ -21,6 +28,7 @@ from app.schemas import (
     InferSingleResponse,
     MemberPredictionOut,
     Prediction,
+    SecondOpinionOut,
 )
 from app.services.telemetry import telemetry
 
@@ -38,6 +46,29 @@ class GateFields(TypedDict):
 
 
 router = APIRouter(prefix="/infer", tags=["inference"])
+
+#: One thread for the second opinion, so the remote call overlaps the local grading instead of
+#: adding to it. A single worker is enough: the API's queue sends one image at a time.
+_second_opinion_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="segunda-opinion")
+
+
+def _second_opinion_result(
+    checker: SkinConditionChecker | None, future: Future[SecondOpinion] | None
+) -> SecondOpinionOut | None:
+    """The advisory answer, or ``None`` if it was off or failed — never an error for the grade."""
+    if checker is None or future is None:
+        return None
+    try:
+        opinion = future.result()
+    except Exception as error:  # advisory: a failed second opinion must never cost a grade
+        logger.warning("La segunda opinión falló (%s). Se gradúa sin ella.", error)
+        return None
+    return SecondOpinionOut(
+        label=opinion.label,
+        conditions=list(opinion.conditions),
+        explanation=opinion.explanation,
+        version=checker.version,
+    )
 
 MAX_IMAGE_BYTES = 15 * 1024 * 1024
 
@@ -146,6 +177,15 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
         )
     )
 
+    # Only images about to be graded are sent: the gate already explained the rest, and every call
+    # is a photograph leaving the machine. It runs alongside the grading, never in front of it.
+    checker = get_second_opinion()
+    second_future = (
+        None
+        if checker is None
+        else _second_opinion_pool.submit(checker.check, image_bytes, request.mime_type)
+    )
+
     try:
         result = classifier.predict(image_bytes, request.mime_type, context)
     except Exception as error:
@@ -155,8 +195,32 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
             detail=f"Fallo durante la inferencia: {error}",
         ) from error
 
+    second_opinion = _second_opinion_result(checker, second_future)
     latency_ms = (time.perf_counter() - started) * 1000
     telemetry.record(latency_ms)
+
+    # Another condition seen by the second opinion: not graded, exactly like the gate's `no_acne`.
+    # The grade was computed in parallel and is discarded here, never returned: a severity of
+    # acne for vitiligo must not reach the record. Healthy skin IS on the IGA scale (grade 0), so
+    # it is graded and only warned about.
+    if (
+        second_opinion is not None
+        and second_opinion.label == "otra_condicion"
+        and settings.second_opinion_stops_grading
+    ):
+        return InferSingleResponse(
+            verdict="no_acne",
+            verdict_source="segunda_opinion",
+            **gate_fields,
+            second_opinion=second_opinion,
+            prediction=None,
+            gags_secondary=None,
+            latency_ms=round(latency_ms),
+            model_version=classifier.version,
+            model_backend=classifier.backend,  # type: ignore[arg-type]
+            weights_checksum=classifier.weights_checksum,
+            seed=settings.model_seed,
+        )
 
     # Prefer the model's own GAGS when it produced one. The band centre is a presentational
     # fallback derived from the IGA class, so using it over a real estimate would throw away the
@@ -171,6 +235,7 @@ def infer_single(request: InferSingleRequest) -> InferSingleResponse:
     return InferSingleResponse(
         verdict="acne",
         **gate_fields,
+        second_opinion=second_opinion,
         prediction=Prediction(
             iga_class=result.iga_class,
             confidence=result.confidence,

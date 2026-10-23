@@ -69,6 +69,19 @@ class Settings(BaseSettings):
     acne_gate_checkpoint: str = "./checkpoints/acne_gate.pt"
     acne_gate_threshold: float | None = None
 
+    #: Second opinion before grading (see `app/models/condition_check.py`): for every image the
+    #: gate lets through as acne, an external model says whether it shows acne, healthy skin or
+    #: another condition; «another condition» stops the grading (see below), anything else only
+    #: warns. A failure never costs a grade. `none` turns it off; `gemini`
+    #: needs `GEMINI_API_KEY` and sends a reduced copy of the photograph to Google's API.
+    second_opinion_backend: Literal["none", "gemini"] = "none"
+    #: When the second opinion says «another condition» (vitiligo, melasma…), the image is NOT
+    #: graded — the same rule as the local gate's `no_acne`: an IGA grade for vitiligo is
+    #: meaningless and would enter the record. `false` keeps it advisory (graded, with a warning).
+    #: Healthy skin, acne next to something else, or «can't tell» are always graded.
+    second_opinion_stops_grading: bool = True
+    second_opinion_timeout_seconds: int = 20
+
     #: Gemini backend. The key lives in `.env`, which is gitignored; never in `.env.example`.
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"

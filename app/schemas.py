@@ -97,6 +97,19 @@ class MemberPredictionOut(BaseModel):
     latency_ms: int
 
 
+class SecondOpinionOut(BaseModel):
+    """What an independent model saw in the photograph, before the IGA models graded it."""
+
+    label: Literal["acne", "piel_sana", "otra_condicion", "indeterminado"] = Field(
+        ..., description="Qué muestra principalmente la imagen."
+    )
+    conditions: list[str] = Field(
+        default_factory=list,
+        description="Condiciones distintas del acné que se observan (vacía si ninguna).",
+    )
+    explanation: str = Field(default="", description="Una frase para el dermatólogo.")
+    version: str = Field(..., description="Modelo y revisión de la pregunta, p. ej. gemini/…/c1.")
+
 class InferSingleResponse(BaseModel):
     verdict: Literal["acne", "piel_sana", "no_acne"] = Field(
         default="acne",
@@ -105,6 +118,14 @@ class InferSingleResponse(BaseModel):
             "(las pecas incluidas) y la sugerencia es `sin_lesiones` con la probabilidad DEL "
             "FILTRO; el ensemble no corrió (sin miembros ni Grad-CAM). `no_acne`: otra condición "
             "(vitíligo, psoriasis…); no se graduó y `prediction`, `gags_secondary` vienen nulos."
+        ),
+    )
+    verdict_source: Literal["filtro", "segunda_opinion"] = Field(
+        default="filtro",
+        description=(
+            "Quién decidió `verdict`: `filtro` (el filtro local, o nadie si `gate_checked` es "
+            "falso) o `segunda_opinion` (la verificación previa vio otra condición y la imagen no "
+            "se graduó, aunque el filtro dijera acné; ver `second_opinion`)."
         ),
     )
     gate_probabilities: dict[str, float] | None = Field(
@@ -159,6 +180,17 @@ class InferSingleResponse(BaseModel):
         default=None,
         description="Acuerdo entre los miembros del ensemble; null con un solo modelo.",
     )
+    second_opinion: SecondOpinionOut | None = Field(
+        default=None,
+        description=(
+            "Segunda opinión antes de graduar, consultada solo para imágenes que el filtro deja "
+            "pasar como acné. Si dice `otra_condicion` (y SECOND_OPINION_STOPS_GRADING está "
+            "activo), la imagen no se gradúa: `verdict` es `no_acne` y `verdict_source` es "
+            "`segunda_opinion`. En los demás casos es informativa. Nula cuando está desactivada, "
+            "no se consultó o falló."
+        ),
+    )
+
 
 
 # --- Admission screening -----------------------------------------------------

@@ -189,11 +189,34 @@ uv run python -m training.gate.evaluate_gate     # test: por fuente, fototipo, e
 **El checkpoint sale como candidato** (`acne_gate.candidate.pt`) y el motor no lo carga: solo sirve
 `checkpoints/acne_gate.pt`. **Activo desde el 19/10/2026: el modelo 2**
 (`gate3_efficientnet_b0_20261019T154808Z`, entrenado con Fitzpatrick17k completo) con
-`ACNE_GATE_THRESHOLD=0.009` (en `.env` y en `docker-compose.yml`). Reconoce el 90 % del acné de otras
-cámaras frente al 41 % del modelo 1 (13/10/2026), que había aprendido la cámara de ACNE04; la
-comparación está en `05_evaluation.md` §9. Sigue pendiente validarlo con fotos de la clínica
+`ACNE_GATE_THRESHOLD=0.1` (en `.env` y en `docker-compose.yml`; el umbral de validación, 0,009,
+dejaba pasar un acercamiento de pecas con `p(acné) = 0,055`, ver `05_evaluation.md` §9). Con 0,1
+reconoce el 86 % del acné de otras cámaras (ACNE04: 100 %) frente al 41 % del modelo 1 (13/10/2026),
+que había aprendido la cámara de ACNE04; la comparación está en `05_evaluation.md` §9. Sigue pendiente validarlo con fotos de la clínica
 (`training/gate/validate_clinic.py`). Para desactivarlo: `ACNE_GATE_ENABLED=false`. Sin filtro, el motor gradúa todo como antes, responde `gate_checked: false` y
 `/audit/iia-check` lo advierte.
+
+**Segunda opinión antes de graduar (desde el 19/10/2026).** El filtro local aprendió también la
+cámara: un acercamiento de vitíligo tomado con celular salió `p(acné) = 0,995` y ningún umbral lo
+detiene. Con `SECOND_OPINION_BACKEND=gemini`, para cada imagen que el filtro deja pasar como acné
+se pregunta a Gemini si muestra acné, piel sana u otra condición (`app/models/condition_check.py`,
+pregunta `c1`), **en paralelo** con los modelos IGA. Si ve **otra condición** (vitíligo, melasma,
+rosácea…), la toma **no se gradúa** —la misma regla que el `no_acne` del filtro: un grado IGA para un
+vitíligo no tiene sentido y quedaría en la historia—: responde `verdict: no_acne` con
+`verdict_source: segunda_opinion`. Si ve piel sana o acné junto a otra condición, se gradúa igual y
+solo se advierte (el grado 0 está en la escala IGA). `SECOND_OPINION_STOPS_GRADING=false` la deja
+solo como aviso. El portal muestra «Verificación previa: posible vitíligo, no acné» con lo que vio. Solo corre dentro de `/infer/single`, que no se invoca en
+pretest (RF-TR-01). Lo que sale del equipo es una copia de máximo 1024 px en JPEG sin EXIF (sin GPS,
+dispositivo ni fecha), sin nombre, código ni anamnesis. Requisitos: clave de **pago** (el plan
+gratuito puede usar el contenido para entrenar) y consentimiento informado que mencione el análisis
+por un servicio externo. No es reproducible (RNF-03) y ninguna métrica de la tesis depende de ella.
+Si falla, no hay clave o expira el tiempo, se gradúa igual y `second_opinion` vuelve nulo.
+
+```bash
+# acne-ai-engine/.env
+SECOND_OPINION_BACKEND=gemini
+GEMINI_API_KEY=...
+```
 
 **Registro de cada entrenamiento.** `train_gate` y `evaluate_gate` dejan todo en
 `runs/gate/<run_id>/` (configuración y entorno, datos, historial por época, curva del umbral,

@@ -21,6 +21,9 @@ os.environ["SCREENING_BACKEND"] = "none"
 # Same for the acne gate: a checkpoint on disk must not decide which test images get graded. The
 # gate path is exercised with a fake gate (test_acne_gate.py).
 os.environ["ACNE_GATE_ENABLED"] = "false"
+# And for the second opinion: a key in `.env` must never send a test image to Google. The path is
+# exercised with a fake checker (test_condition_check.py).
+os.environ["SECOND_OPINION_BACKEND"] = "none"
 
 import pytest
 from PIL import Image

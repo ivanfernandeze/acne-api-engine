@@ -171,6 +171,40 @@ class AcneGate(Protocol):
         ...
 
 
+SecondOpinionLabel = Literal["acne", "piel_sana", "otra_condicion", "indeterminado"]
+
+
+@dataclass(frozen=True)
+class SecondOpinion:
+    """An independent look at the photograph, taken before the IGA models grade it.
+
+    When it says `otra_condicion` the image is not graded (``verdict = no_acne``, decided by the
+    second opinion; switch: ``SECOND_OPINION_STOPS_GRADING``). Anything else only adds a warning
+    next to the grade, and a failure never costs one; the specialist always decides. It exists
+    because the local gate learned the camera as much as the skin — a phone close-up of vitiligo
+    came out `p(acne) = 0.995` — and a model that has seen far more dermatology is a cheap second
+    check.
+    """
+
+    label: SecondOpinionLabel
+    #: Conditions other than acne that the image shows, in Spanish, most evident first. Empty when
+    #: there are none. Present even when `label` is `acne`: acne next to vitiligo is worth saying.
+    conditions: tuple[str, ...]
+    #: One sentence for the clinician: what was seen that supports the label.
+    explanation: str
+
+
+@runtime_checkable
+class SkinConditionChecker(Protocol):
+    """Second opinion on what a photograph shows, consulted only for images about to be graded."""
+
+    version: str
+
+    def check(self, image_bytes: bytes, mime_type: str) -> SecondOpinion:
+        """Say whether the image shows acne, healthy skin or another condition."""
+        ...
+
+
 Agreement = Literal["unanime", "mayoria", "discrepancia"]
 
 

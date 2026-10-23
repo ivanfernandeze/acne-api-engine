@@ -5,6 +5,80 @@ versionado con [SemVer](https://semver.org/lang/es/).
 
 ## [No publicado]
 
+### Added — segunda opinión antes de graduar (22/10/2026)
+
+- **`app/models/condition_check.py`** (`GeminiConditionChecker`): para cada toma que el filtro local
+  deja pasar como acné, `POST /infer/single` pregunta a Gemini si muestra `acne`, `piel_sana`,
+  `otra_condicion` o `indeterminado`, con la lista de condiciones distintas del acné (sin pecas,
+  lunares ni poros) y una frase de explicación. Pregunta revisión `c1`; versión
+  `gemini/<modelo>/c1`. Motivo: una foto de celular de vitíligo con pecas dio `p(acné) = 0,995` en el
+  filtro (ningún umbral la detiene) y el ensemble la graduó «casi sin lesiones» en las tres tomas;
+  el filtro aprendió en parte la cámara (acné = acercamientos de ACNE04, sana = retratos CFD, otra =
+  atlas de Fitzpatrick17k).
+- Protocolo `SkinConditionChecker` y `SecondOpinion` (`app/models/base.py`);
+  `get_second_opinion()` en `registry.py` (`None` si está desactivada o no se puede activar).
+- Corre **en paralelo** con los modelos IGA (un hilo, `ThreadPoolExecutor`), así que casi no añade
+  latencia. Si falla, se agota el tiempo o no hay clave, se gradúa como antes, sin advertencia.
+- **Regla: otra condición no se gradúa.** Si la segunda opinión dice `otra_condicion`, la toma
+  responde `verdict = no_acne` con `prediction` y `gags_secondary` nulos (la lectura calculada en
+  paralelo se descarta), igual que el `no_acne` del filtro. Piel sana o acné junto a otra condición
+  sí se gradúan, con advertencia en el portal. `SECOND_OPINION_STOPS_GRADING=false` la deja solo
+  informativa.
+- Contrato (`InferSingleResponse`): `second_opinion {label, conditions[], explanation, version} |
+  null` (`SecondOpinionOut`) y **`verdict_source`** (`filtro` | `segunda_opinion`): quién decidió
+  `verdict`.
+- Variables nuevas: `SECOND_OPINION_BACKEND=none|gemini` (por defecto `none`),
+  `SECOND_OPINION_TIMEOUT_SECONDS=20`, `SECOND_OPINION_STOPS_GRADING=true`; usa `GEMINI_API_KEY` y
+  `GEMINI_MODEL`. Documentadas en `.env.example` (sin la clave).
+- No es reproducible (RNF-03): el modelo remoto puede cambiar sin aviso; ninguna métrica de la tesis
+  depende de ella. Solo se consulta desde la inferencia, que no se invoca en pretest (RF-TR-01).
+- Pruebas: `tests/test_condition_check.py` con un verificador simulado; `conftest.py` fuerza
+  `SECOND_OPINION_BACKEND=none` para que ninguna prueba envíe imágenes a Google. Total: **139**
+  pruebas (pytest).
+
+### Changed — umbral del filtro de acné a 0,1 (22/10/2026)
+
+- `ACNE_GATE_THRESHOLD=0.1` (antes 0,009, el elegido en validación). Una foto de pecas (efélides)
+  dio `p(acné) = 0,055`, pasaba como acné y el ensemble la graduó «severo». Coste en el test del
+  modelo 2: sensibilidad sobre acné 0,964 (ACNE04 1,000; Fitzpatrick17k 0,863 frente a 0,900) y
+  especificidad 0,949 (frente a 0,917). Se fija por entorno (`.env` del motor y
+  `acne-infra/docker-compose.yml`); el checkpoint no cambia. Detalle en
+  `acne-infra/docs/05_evaluation.md` §9.
+
+### Security — privacidad de la segunda opinión (22/10/2026)
+
+- Desactivada por defecto. Cuando está activa, sale del equipo solo una copia **reducida** (lado
+  mayor 1 024 px), re-codificada en JPEG y **sin EXIF** (sin GPS, dispositivo ni fecha); no viaja el
+  nombre, el código del caso ni la anamnesis.
+- Requisitos aceptados por el equipo: clave de un proyecto de Google con facturación (el plan
+  gratuito puede usar el contenido para entrenar) y consentimiento informado que mencione el análisis
+  por un servicio externo. La clave vive solo en `.env`, nunca en `.env.example`.
+
+### Added — filtro acné / piel sana / otra condición antes de graduar (01/10–19/10/2026)
+
+- **`app/models/acne_gate.py`** (`TorchAcneGate`): EfficientNet-B0 de tres clases con recorte de
+  rostro (YuNet). Decide en dos pasos: acné si `p(acné) ≥ umbral`; si no, la más probable entre piel
+  sana y otra condición. `acne` → gradúa el ensemble IGA; `piel_sana` → lectura `sin_lesiones` con la
+  probabilidad del filtro, sin ensemble; `no_acne` → no se gradúa. Sin checkpoint falla abierto
+  (`gate_checked: false`). Vive en `/infer/single`, nunca en el cribado (RF-TR-01).
+- Contrato de `/infer/single`: `verdict`, `gate_checked`, `acne_probability`, `gate_threshold`,
+  `gate_version`, `gate_probabilities`; `prediction` y `gags_secondary` nulos con `no_acne`.
+- **`training/gate/`**: construcción del dataset (ACNE04 + Fitzpatrick17k, Chicago Face Database,
+  Fitzpatrick17k; partición por persona), entrenamiento, evaluación por fuente/fototipo/etnia/
+  luminancia, reporte y `validate_clinic.py` para fotos de la clínica. Cada corrida deja
+  `runs/gate/<run_id>/` y un reporte en `acne-infra/docs/entrenamientos/`.
+- **`training/audit_fairness_cfd.py`**: auditoría de equidad de los modelos IGA sobre caras sanas.
+- Activo desde el 19/10/2026: modelo 2 (`gate3_efficientnet_b0_20261019T154808Z`), acné de otras
+  cámaras 0,413 → 0,900 frente al modelo 1. Detalle en `05_evaluation.md` §9–§10.
+
+### Added — orientación de la cabeza en el cribado (01/10/2026)
+
+- `LocalScreener` mide la pose con los landmarks de YuNet:
+  `yaw_ratio = (x_nariz − x_medio_ojos) / ancho_rostro`; `frontal` si |r| < 0,04, girado si
+  |r| ≥ 0,06, `indeterminado` con confianza < 0,6 o en la franja intermedia. `POST /image/screen`
+  devuelve `pose` y `yaw_ratio` (solo geometría, nada clínico). `training/calibrate_pose.py` fija
+  los cortes.
+
 ### Changed — imagen Docker con los modelos reales (23/09/2026)
 
 - `WITH_TORCH=1` por defecto. Instala `torch==2.11.0`/`torchvision==0.26.0` desde `TORCH_INDEX`

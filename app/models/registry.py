@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from app.config import get_settings
-from app.models.base import AcneGate, Classifier, ImageScreener
+from app.models.base import AcneGate, Classifier, ImageScreener, SkinConditionChecker
 from app.models.stub import StubClassifier
 
 logger = logging.getLogger(__name__)
@@ -155,8 +155,38 @@ def get_acne_gate() -> AcneGate | None:
         return None
 
 
+@lru_cache(maxsize=1)
+def get_second_opinion() -> SkinConditionChecker | None:
+    """The second opinion consulted before grading, or ``None`` when it is off.
+
+    ``None`` is the default (``SECOND_OPINION_BACKEND=none``) and also what a missing key gives:
+    the engine then grades exactly as before and ``/infer/single`` answers ``second_opinion: null``.
+    """
+    settings = get_settings()
+    if settings.second_opinion_backend == "none":
+        return None
+    try:
+        from app.models.condition_check import GeminiConditionChecker
+
+        checker = GeminiConditionChecker(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
+            timeout_seconds=settings.second_opinion_timeout_seconds,
+        )
+        logger.info(
+            "Segunda opinión antes de graduar activa: %s. Las fotografías se envían, reducidas y "
+            "sin metadatos, a la API de Google.",
+            checker.version,
+        )
+        return checker
+    except Exception as error:
+        logger.error("No se pudo activar la segunda opinión (%s). Se gradúa sin ella.", error)
+        return None
+
+
 def reset_classifier_cache() -> None:
-    """Clear the cached classifier, screener and gate; used by the tests."""
+    """Clear the cached classifier, screener, gate and second opinion; used by the tests."""
     get_classifier.cache_clear()
     get_screener.cache_clear()
     get_acne_gate.cache_clear()
+    get_second_opinion.cache_clear()
